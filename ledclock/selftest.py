@@ -261,6 +261,75 @@ def run_lifecycle_checks(verbose: bool = True) -> bool:
     return not failures
 
 
+def run_wake_checks(verbose: bool = True) -> bool:
+    """Wake-phrase matching, for repeated and distinct phrasings alike."""
+    from .voice import wake_index, wake_tokens
+
+    failures: list[str] = []
+
+    def check(label: str, condition: bool, detail: str = "") -> None:
+        if condition:
+            if verbose:
+                print(f"  ok    {label}")
+        else:
+            failures.append(label)
+            print(f"  FAIL  {label}{(' - ' + detail) if detail else ''}")
+
+    # A repeated word is a tolerance setting: say it three times, accept two.
+    triple = wake_tokens("clock clock clock", 2)
+    check("repeated phrase honours wake_min_repeats", triple == ["clock"] * 2, str(triple))
+    check("two hits wake it",
+          wake_index(triple, "clock clock set a timer".split()) == 2)
+    check("a third hit is swallowed, not treated as the command",
+          wake_index(triple, "clock clock clock set a timer".split()) == 3)
+    check("one hit is not enough", wake_index(triple, "clock set a timer".split()) is None)
+    check("strict mode needs all three",
+          wake_index(wake_tokens("clock clock clock", 3), "clock clock go".split()) is None)
+    check("cannot demand more repeats than the phrase has",
+          wake_tokens("clock", 3) == ["clock"], str(wake_tokens("clock", 3)))
+
+    # A single distinct word wakes on one hit.
+    solo = wake_tokens("timekeeper", 2)
+    check("single word ignores wake_min_repeats", solo == ["timekeeper"], str(solo))
+    check("single word wakes on one hit",
+          wake_index(solo, "timekeeper set a timer".split()) == 1)
+    check("and still works mid-utterance",
+          wake_index(solo, "um timekeeper set a timer".split()) == 2)
+    check("a different word does not wake it",
+          wake_index(solo, "timer set a timer".split()) is None)
+
+    # Distinct multi-word phrases must match in full and in order.
+    pair = wake_tokens("hey timekeeper", 2)
+    check("distinct phrase is matched whole", pair == ["hey", "timekeeper"], str(pair))
+    check("the full phrase wakes it",
+          wake_index(pair, "hey timekeeper set a timer".split()) == 2)
+    check("half the phrase does not",
+          wake_index(pair, "timekeeper set a timer".split()) is None)
+    check("nor does the wrong order",
+          wake_index(pair, "timekeeper hey set a timer".split()) is None)
+    check("nor the words split apart",
+          wake_index(pair, "hey there timekeeper set".split()) is None)
+
+    # Punctuation and case in the config must not matter.
+    check("punctuation and case are normalised",
+          wake_tokens("Hey, Timekeeper!", 2) == ["hey", "timekeeper"],
+          str(wake_tokens("Hey, Timekeeper!", 2)))
+    check("an empty phrase falls back rather than matching everything",
+          wake_tokens("", 2) == ["clock"], str(wake_tokens("", 2)))
+
+    # Every word of the phrase has to reach the recogniser's grammar.
+    from .intents import vocabulary
+
+    grammar = set(vocabulary(["hey", "timekeeper"]))
+    check("the whole phrase reaches the grammar",
+          {"hey", "timekeeper"} <= grammar,
+          str({"hey", "timekeeper"} - grammar))
+    check("a string phrase works too", set(vocabulary("hey timekeeper")) == grammar)
+
+    print(f"\n{len(failures)} wake failure(s)")
+    return not failures
+
+
 def run_power_checks(verbose: bool = True) -> bool:
     """The confirmation gate in front of shutdown and reboot.
 

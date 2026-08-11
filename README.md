@@ -62,8 +62,8 @@ Say the wake phrase, then a command. Both of these work — the command can ride
 in the same breath as the wake phrase or follow it:
 
 ```
-"clock clock clock, set a timer for three minutes"
-"clock clock clock" ... "set an alarm for four p.m."
+"timekeeper, set a timer for three minutes"
+"timekeeper" ... "set an alarm for four p.m."
 ```
 
 | What you say | What happens |
@@ -90,9 +90,9 @@ A stopwatch is the timer run backwards, for when you don't know in advance how
 long the thing will take:
 
 ```
-"clock clock clock, start a stopwatch"
-"clock clock clock, pause the stopwatch"
-"clock clock clock, cancel watch one"
+"timekeeper, start a stopwatch"
+"timekeeper, pause the stopwatch"
+"timekeeper, cancel watch one"
 ```
 
 It differs from a timer in three ways, all of which follow from having no
@@ -113,8 +113,8 @@ deadline to move instead. It will not go below zero.
 utterance. The panel asks `shutdown? say yes` and waits ten seconds:
 
 ```
-"clock clock clock, shut down"     ->  panel: shutdown? say yes
-"clock clock clock, yes"           ->  goes down
+"timekeeper, shut down"     ->  panel: shutdown? say yes
+"timekeeper, yes"           ->  goes down
 ```
 
 Only `yes` gets through. Saying "shut down" a second time does not count, and
@@ -136,6 +136,39 @@ leaves the Pi, and it keeps working when the WiFi drops into autoAP mode.
 Accuracy comes from restricting the recogniser to the command vocabulary
 (`voice.use_grammar`). Set it `false` to experiment with free-form phrasing,
 at a noticeable cost in reliability.
+
+### Changing the wake phrase
+
+`voice.wake_phrase` takes anything — one word or several:
+
+```toml
+wake_phrase = "timekeeper"        # wakes on one hit
+wake_phrase = "hey timekeeper"    # both words, in order, together
+wake_phrase = "clock clock clock" # one word repeated: see below
+```
+
+**Check a new phrase before you rely on it.** A word the speech model has no
+pronunciation for is dropped from the grammar without complaint, and the clock
+then simply never wakes — with nothing in the log to say why:
+
+```bash
+python -m ledclock --check-wake "timekeeper"   # or bare, to test the config
+```
+
+If a word comes back missing, splitting it usually rescues it: `time keeper`
+is two words the model definitely knows. The clock now also logs an explicit
+error at startup if its own wake phrase is unrecognisable.
+
+**`wake_min_repeats` only applies to a phrase of one word repeated.** There it
+means "say it three times, but two landing is enough", so a mic that clips the
+first one doesn't cost you the command. A phrase of distinct words is always
+matched in full and the setting is ignored.
+
+The trade-off between the two forms is false wake-ups against effort. A single
+distinctive word is the least trouble to say and, being rare, rarely turns up
+by accident — but it only has one hit to be sure about. If yours starts
+triggering on its own, write it twice (`"timekeeper timekeeper"`) and leave
+`wake_min_repeats = 2`; that costs nothing but a syllable.
 
 ### Hearing you further away
 
@@ -216,6 +249,9 @@ python -m ledclock --list-audio
 
 # How loud is the mic actually hearing you?  (Stop the service first.)
 python -m ledclock --mic-level
+
+# Can the speech model actually hear this wake phrase?
+python -m ledclock --check-wake "timekeeper"
 ```
 
 ## Preferences
@@ -394,7 +430,7 @@ and stays root so the button pins and state file remain writable.
 | Sparkle, ghosting, flicker | raise `gpio_slowdown` (3–5 on a Pi 4) |
 | Refuses to start, mentions sound | `snd_bcm2835` got loaded again |
 | Bottom half wrong / rows doubled | `multiplexing` or `row_address_type` |
-| Voice never triggers | check `--list-audio`, then `--mic-level` |
+| Voice never triggers | `--check-wake`, then `--list-audio` and `--mic-level` |
 | Only works up close | see [Hearing you further away](#hearing-you-further-away) |
 | Voice triggers by itself | `wake_min_repeats = 3`, and lower `voice.gain` |
 | It shut down on its own | `[power] confirm` got turned off; put it back |

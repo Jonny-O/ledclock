@@ -157,10 +157,20 @@ snooze_minutes = 9
 
 [voice]
 enabled = true
-wake_phrase = "clock clock clock"
 
-# How many "clock"s in a row must land before it wakes.  3 is strict, 2 is
-# more forgiving when the mic clips the first word.
+# Anything you like, one word or several.  Check it before you commit to it —
+# a word the speech model has no pronunciation for is dropped without
+# complaint and the clock then never wakes at all:
+#     python -m ledclock --check-wake "timekeeper"
+wake_phrase = "timekeeper"
+
+# Only applies when wake_phrase is one word repeated, e.g. "clock clock
+# clock": it says how many of them must actually land, so a mic that clips
+# the first one does not cost you the command.  A phrase of distinct words is
+# always matched in full, and this is ignored.
+#
+# A single word wakes on one hit.  If that turns out to trigger by itself,
+# make it "timekeeper timekeeper" and leave this at 2.
 wake_min_repeats = 2
 
 command_timeout = 8.0

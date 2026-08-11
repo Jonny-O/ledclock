@@ -152,9 +152,12 @@ DEFAULTS: dict[str, Any] = {
     },
     "voice": {
         "enabled": True,
-        "wake_phrase": "clock clock clock",
-        # How many of the wake words must land in a row (1-3).  Three is
-        # strict; two is friendlier if the mic clips a word.
+        # One word or several.  Check any new phrase against the speech
+        # model first: python -m ledclock --check-wake "<phrase>"
+        "wake_phrase": "timekeeper",
+        # Only meaningful when wake_phrase is one word repeated ("clock clock
+        # clock"): how many must land in a row.  Distinct phrases are always
+        # matched in full.
         "wake_min_repeats": 2,
         # Seconds to keep listening for a command after waking.
         "command_timeout": 8.0,

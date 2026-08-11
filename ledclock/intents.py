@@ -431,18 +431,22 @@ def _time_slice(tokens: list[str]) -> list[str]:
 # recognizer grammar
 # --------------------------------------------------------------------------
 
-def vocabulary(wake_word: str = "clock") -> list[str]:
+def vocabulary(wake: str | list[str] = "clock") -> list[str]:
     """Closed word list handed to Vosk as a grammar.
+
+    ``wake`` is the whole wake phrase, since every word in it has to be in
+    the grammar for the phrase to be recognisable at all.
 
     ``[unk]`` lets the recognizer report out-of-vocabulary audio instead of
     force-fitting it to a real word, which keeps false wake-ups down.
     """
+    wake_words = wake.split() if isinstance(wake, str) else list(wake)
     words: set[str] = set()
     words.update(UNITS, TENS, ORDINALS)
     words.update(SECOND_WORDS, MINUTE_WORDS, HOUR_WORDS)
     words.update(FILLER, _CANCEL, _CREATE, _AFFIRM, _DENY, KIND_ALIASES)
+    words.update(wake_words)
     words.update({
-        wake_word,
         "shutdown", "shut", "down", "power", "poweroff", "halt",
         "reboot", "restart", "count", "counting", "counter", "elapsed",
         "am", "pm", "o", "clock", "noon", "midnight", "midday",

@@ -18,10 +18,12 @@ import array
 import json
 import logging
 import math
+import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from typing import Callable
@@ -33,6 +35,67 @@ log = logging.getLogger(__name__)
 
 CHUNK_BYTES = 4000  # ~125 ms of 16 kHz mono S16_LE
 FULL_SCALE = 32768.0
+
+# Vosk reports grammar words it has no pronunciation for like this, on stderr
+# from C++, and then drops them silently.
+_MISSING_RE = re.compile(r"Ignoring word missing in vocabulary: '([^']+)'")
+
+
+def wake_tokens(phrase: str, min_repeats: int = 2) -> list[str]:
+    """The word sequence that must land, in order, to wake the clock.
+
+    One word repeated ("clock clock clock") is a tolerance setting rather
+    than a literal: ``wake_min_repeats`` says how many of them actually have
+    to arrive, because a mic that clips the first one should not cost you the
+    command.  Any other phrase ("timekeeper", "hey timekeeper") is matched in
+    full — there is no repetition to be tolerant about.
+    """
+    words = [w for w in re.split(r"[^a-z0-9]+", str(phrase).lower()) if w]
+    if not words:
+        return ["clock"]
+    if len(set(words)) == 1:
+        return words[: max(1, min(len(words), int(min_repeats)))]
+    return words
+
+
+def wake_index(tokens: list[str], words: list[str]) -> int | None:
+    """Index just past the wake phrase in ``words``, or None if absent."""
+    n = len(tokens)
+    if not n:
+        return None
+    for i in range(len(words) - n + 1):
+        if words[i:i + n] == tokens:
+            j = i + n
+            # Swallow further repeats of the final word, so a fourth "clock"
+            # is not mistaken for the start of the command.
+            while j < len(words) and words[j] == tokens[-1]:
+                j += 1
+            return j
+    return None
+
+
+def _grammar_recognizer(model, rate: int, words: list[str]):
+    """Build a grammar recognizer, and report which words Vosk threw away.
+
+    A wake word the lexicon has never heard fails totally and silently: the
+    clock simply never wakes, with nothing in the log to say why.  The only
+    way to see it from Python is to catch the C++ log at the file descriptor.
+    """
+    import vosk
+
+    with tempfile.TemporaryFile() as tmp:
+        saved = os.dup(2)
+        os.dup2(tmp.fileno(), 2)
+        try:
+            vosk.SetLogLevel(0)
+            rec = vosk.KaldiRecognizer(model, rate, json.dumps(words))
+        finally:
+            vosk.SetLogLevel(-1)
+            os.dup2(saved, 2)
+            os.close(saved)
+        tmp.seek(0)
+        log = tmp.read().decode(errors="replace")
+    return rec, set(_MISSING_RE.findall(log))
 
 
 def amplify(data: bytes, gain: float) -> bytes:
@@ -76,9 +139,10 @@ class VoiceListener:
         self.arecord = str(c.get("arecord", "arecord"))
         self.gain = max(0.1, float(c.get("gain", 1.0)))
 
-        phrase = str(c.get("wake_phrase", "clock clock clock")).lower().split()
-        self.wake_word = phrase[0] if phrase else "clock"
-        self.wake_repeats = max(1, min(len(phrase) or 1, int(c.get("wake_min_repeats", 2))))
+        self.wake_tokens = wake_tokens(
+            c.get("wake_phrase", "clock clock clock"),
+            c.get("wake_min_repeats", 2),
+        )
 
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
@@ -136,11 +200,26 @@ class VoiceListener:
 
         vosk.SetLogLevel(-1)
         model = vosk.Model(str(self.model_path))
-        if self.use_grammar:
-            grammar = json.dumps(intents.vocabulary(self.wake_word))
-            rec = vosk.KaldiRecognizer(model, self.rate, grammar)
-        else:
+        if not self.use_grammar:
             rec = vosk.KaldiRecognizer(model, self.rate)
+            rec.SetWords(False)
+            return model, rec
+
+        rec, dropped = _grammar_recognizer(
+            model, self.rate, intents.vocabulary(self.wake_tokens)
+        )
+        if dropped:
+            log.warning("no pronunciation in the speech model for: %s",
+                        ", ".join(sorted(dropped)))
+        unheard = dropped & set(self.wake_tokens)
+        if unheard:
+            log.error(
+                "wake word(s) %s are not in the model's lexicon, so the clock can "
+                "never wake.  Choose another word, or split it up "
+                "(\"time keeper\" rather than \"timekeeper\").  Check candidates "
+                "with: python -m ledclock --check-wake \"<phrase>\"",
+                ", ".join(sorted(unheard)),
+            )
         rec.SetWords(False)
         return model, rec
 
@@ -161,7 +240,7 @@ class VoiceListener:
             log.exception("could not load the vosk model; voice control off")
             self.enabled = False
             return
-        log.info("voice model loaded; wake phrase = %s", " ".join([self.wake_word] * self.wake_repeats))
+        log.info("voice model loaded; wake phrase = %r", " ".join(self.wake_tokens))
 
         backoff = 1.0
         while not self._stop.is_set():
@@ -217,20 +296,7 @@ class VoiceListener:
     # ---------------- wake handling ----------------
 
     def _wake_index(self, words: list[str]) -> int | None:
-        """Index just past the wake run, or None if it isn't there."""
-        run = 0
-        for i, word in enumerate(words):
-            if word == self.wake_word:
-                run += 1
-                if run >= self.wake_repeats:
-                    # Consume any further repeats.
-                    j = i + 1
-                    while j < len(words) and words[j] == self.wake_word:
-                        j += 1
-                    return j
-            else:
-                run = 0
-        return None
+        return wake_index(self.wake_tokens, words)
 
     def _wake(self) -> None:
         self._awake_until = time.monotonic() + self.command_timeout
@@ -261,6 +327,55 @@ class VoiceListener:
             self.on_intent(intent)
         except Exception:
             log.exception("intent dispatch failed for %r", text)
+
+
+def check_wake(cfg: Config, phrase: str | None = None) -> int:
+    """Report whether a wake phrase can actually be recognised.
+
+    Worth running before editing the config: a word the acoustic model has no
+    pronunciation for is dropped from the grammar without complaint, and the
+    clock then never wakes at all.
+    """
+    c = cfg.section("voice")
+    raw = phrase if phrase is not None else c.get("wake_phrase", "clock clock clock")
+    tokens = wake_tokens(raw, c.get("wake_min_repeats", 2))
+
+    print(f"phrase:  {raw!r}")
+    print(f"must hear: {' '.join(tokens)}")
+    if len(set(tokens)) == 1 and len(tokens) > 1:
+        print(f"           (one word repeated, so wake_min_repeats={len(tokens)} applies)")
+    elif len(tokens) > 1:
+        print("           (distinct words, matched in full — wake_min_repeats is ignored)")
+
+    model_path = cfg.resolve(c.get("model_path"))
+    if not model_path.is_dir():
+        print(f"\ncannot check the lexicon: no model at {model_path}")
+        return 1
+    try:
+        import vosk
+    except ImportError:
+        print("\ncannot check the lexicon: vosk is not installed here")
+        return 1
+
+    vosk.SetLogLevel(-1)
+    model = vosk.Model(str(model_path))
+    _, dropped = _grammar_recognizer(
+        model, int(c.get("sample_rate", 16000)), intents.vocabulary(tokens)
+    )
+    print()
+    for word in tokens:
+        print(f"  {'NOT IN LEXICON' if word in dropped else 'ok':>14}  {word}")
+
+    unheard = dropped & set(tokens)
+    if unheard:
+        print(f"\nthis phrase can never wake the clock: {', '.join(sorted(unheard))}")
+        print("try splitting the word up (\"time keeper\"), or pick another.")
+        return 1
+    print("\nevery word is in the lexicon; this phrase will work")
+    if len(tokens) == 1:
+        print("note: a single word wakes on one hit.  If it triggers by itself, say it")
+        print("      twice in wake_phrase and set wake_min_repeats = 2.")
+    return 0
 
 
 def meter(cfg: Config, seconds: float = 15.0) -> int:

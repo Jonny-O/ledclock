@@ -24,6 +24,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="show capture devices and the configured mic, then exit")
     parser.add_argument("--mic-level", metavar="SECONDS", nargs="?", const=15.0, type=float,
                         help="meter the mic and report peak/rms dBFS (default 15s)")
+    parser.add_argument("--check-wake", metavar="PHRASE", nargs="?", const="",
+                        help="check a wake phrase against the speech model, then exit")
     parser.add_argument("--preview", metavar="DIR", nargs="?", const="preview",
                         help="render sample frames to PNGs instead of the panel")
     parser.add_argument("--compare-fonts", metavar="DIR", nargs="?", const="preview",
@@ -90,12 +92,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.check_intents:
         from .selftest import (
             run_intent_checks, run_layout_checks, run_lifecycle_checks,
-            run_power_checks,
+            run_power_checks, run_wake_checks,
         )
         print("intent parsing")
         ok = run_intent_checks()
         print("\nalarm/timer/stopwatch lifecycle")
         ok = run_lifecycle_checks() and ok
+        print("\nwake phrase matching")
+        ok = run_wake_checks() and ok
         print("\nshutdown confirmation gate")
         ok = run_power_checks() and ok
         print("\nclock face layout stability")
@@ -112,6 +116,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.mic_level is not None:
         from .voice import meter
         return meter(cfg, args.mic_level)
+
+    if args.check_wake is not None:
+        from .voice import check_wake
+        # Bare --check-wake tests whatever the config already says.
+        return check_wake(cfg, args.check_wake or None)
 
     from .app import ClockApp, install_signal_handlers
 
