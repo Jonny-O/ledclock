@@ -97,7 +97,10 @@ DEFAULTS: dict[str, Any] = {
         "seconds_bar_group_gap": 2,
         # Largest-first ladder; the biggest font that fits the rows is used.
         "entry_fonts": ["10x20.bdf", "9x18B.bdf", "7x13B.bdf", "6x10.bdf", "5x7.bdf", "4x6.bdf"],
+        # The spoken-command echo on the reserved bottom line.
         "small_font": "4x6.bdf",
+        # The date row under the clock, a step up from small_font.
+        "date_font": "6x10.bdf",
         # 'hms' always shows HH:MM:SS; 'auto' hides a zero hours field.
         "timer_format": "hms",
         # Seconds a spoken-command confirmation stays on screen.

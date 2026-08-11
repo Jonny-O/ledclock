@@ -106,7 +106,16 @@ seconds_bar_group_gap = 2       # gap between the six groups (1 less when compac
 
 font_dir = "rpi-rgb-led-matrix/fonts"
 entry_fonts = ["10x20.bdf", "9x18B.bdf", "7x13B.bdf", "6x10.bdf", "5x7.bdf", "4x6.bdf"]
+
+# The spoken-command echo, which owns the bottom line of the panel.  That line
+# is reserved whether or not anything is showing on it, so the layout above
+# never moves when a command appears or expires.
 small_font = "4x6.bdf"
+
+# The date row under the clock.  Bigger than small_font because it is read
+# from across the room, and it costs nothing: the time is limited by the
+# panel's width, not its height, so the digits stay the same size either way.
+date_font = "6x10.bdf"
 
 [entries]
 # How long an alarm or timer stays on screen after it fires, in seconds.

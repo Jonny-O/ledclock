@@ -525,6 +525,82 @@ def run_layout_checks(verbose: bool = True) -> bool:
             f"{len(changed_rows)} rows changed: {sorted(changed_rows)}",
         )
 
+    # A spoken command appearing or expiring must not shift anything above it.
+    # The bottom line is reserved for it permanently, so the rest of the
+    # layout has no reason to move.
+    toast_h = None
+    for label, entries in (("full screen", []), ("compact", [_sample_timer()])):
+        frames = {}
+        for key, status in (
+            ("quiet", {}),
+            ("toast", {"toast": '"set a timer for three minutes"',
+                       "toast_color": (200, 120, 255)}),
+            ("long", {"toast": "? " + "x" * 60, "toast_color": (200, 80, 80)}),
+        ):
+            backend = PreviewBackend(cfg, scale=1, grid=False)
+            renderer = Renderer(cfg, backend)
+            if toast_h is None:
+                toast_h = backend.font_height(renderer.small_font) + 1
+            with patch("ledclock.display.datetime") as dt:
+                dt.now.return_value = base
+                renderer.render(list(entries), status)
+            px = backend.image.load()
+            frames[key] = [
+                tuple(px[x, y] for x in range(backend.width))
+                for y in range(backend.height)
+            ]
+
+        above = backend.height - toast_h
+        # A row is a tuple of RGB tuples, and (0, 0, 0) is itself truthy, so
+        # the emptiness test has to reach the channel values.
+        intruding = [y for y in range(above, backend.height)
+                     if any(any(px) for px in frames["quiet"][y])]
+        check(f"{label}: the line is empty when nothing was said", not intruding,
+              f"rows {intruding} lit")
+        moved = [y for y in range(above) if frames["quiet"][y] != frames["toast"][y]]
+        check(f"{label}: a spoken command moves nothing above it", not moved,
+              f"rows {moved[:8]} changed")
+        moved = [y for y in range(above) if frames["quiet"][y] != frames["long"][y]]
+        check(f"{label}: nor does an over-long one", not moved,
+              f"rows {moved[:8]} changed")
+        # And it really is confined to that one line.
+        lit = [y for y in range(backend.height)
+               if frames["toast"][y] != frames["quiet"][y]]
+        check(f"{label}: the command stays on the bottom line",
+              lit and min(lit) >= above, f"rows {lit[:8]}")
+
+    # Every month, both because a long name must not run underneath the
+    # meridiem and because the descender in "September" must stay in its own
+    # row rather than dropping into the line below.
+    for month in range(1, 13):
+        when = datetime(2026, month, 28, 19, 29, 41)
+        backend = PreviewBackend(cfg, scale=1, grid=False)
+        renderer = Renderer(cfg, backend)
+        with patch("ledclock.display.datetime") as dt:
+            dt.now.return_value = when
+            renderer.render([], {})
+        px = backend.image.load()
+        band = backend.height - (toast_h or 7)
+        spill = [y for y in range(band, backend.height)
+                 if any(any(px[x, y]) for x in range(backend.width))]
+        check(f"{when:%B}: date stays clear of the command line", not spill,
+              f"rows {spill} lit")
+
+        backend = PreviewBackend(cfg, scale=1, grid=False)
+        renderer = Renderer(cfg, backend)
+        with patch("ledclock.display.datetime") as dt:
+            dt.now.return_value = when
+            renderer.render([], {})
+        px = backend.image.load()
+        date_rgb = tuple(cfg.color("display.date_color"))
+        clock_rgb = tuple(cfg.color("display.clock_color"))
+        row_range = range(backend.height - (toast_h or 7) - 12, backend.height - (toast_h or 7))
+        date_x = [x for y in row_range for x in range(backend.width) if px[x, y] == date_rgb]
+        pm_x = [x for y in row_range for x in range(backend.width) if px[x, y] == clock_rgb]
+        if date_x and pm_x:
+            check(f"{when:%B}: date clears the meridiem", max(date_x) < min(pm_x),
+                  f"date ends {max(date_x)}, PM starts {min(pm_x)}")
+
     # The seconds dots must be a literal count, not a gauge: 60 dots in six
     # groups of ten, with exactly one going dark per second.
     on_rgb = tuple(cfg.color("display.seconds_bar_color"))

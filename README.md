@@ -13,16 +13,20 @@ alarms disappear five minutes after they fire.
    │                               │   │            7:29 PM            │
    │            7:29               │   │ ▪▪▪▪ ▪▪▪▪ ▪▪▪▪ ▪▪·· ···· ···· │
    │ ▪▪▪▪ ▪▪▪▪ ▪▪▪▪ ▪▪·· ···· ···· │   │───────────────────────────────│
-   │       Mon Aug 10          PM  │   │  Alarm1              8:59pm   │
-   └───────────────────────────────┘   │  Timer1            00:03:00   │
-              idle                     │  Watch1            00:12:41   │
+   │  Mon September 28         PM  │   │  Alarm1              8:59pm   │
+   │ "set a timer for 3 minutes"   │   │  Timer1            00:03:00   │
+   └───────────────────────────────┘   │  Watch1            00:12:41   │
                                        └───────────────────────────────┘
-                                                 with entries
+              idle                     with entries
 ```
 
 Under the time is a row of 60 dots — one per second — in six groups of ten,
 draining as the minute runs out. It replaces a blinking colon: it says how far
 through the minute you are, and nothing on screen moves.
+
+The bottom line belongs to the spoken-command echo and nothing else. It is
+reserved whether or not a command is showing, so the date, the meridiem and
+the entry rows never shift when one appears or expires.
 
 ## Install
 
@@ -331,7 +335,14 @@ the panel in one bulk `SetImage` call. Two settings, both in `[display]`:
 clock_font         = ".../InterDisplay-Black.otf"   # the big full-screen clock
 compact_clock_font = ".../DejaVuSans-Bold.ttf"      # the quarter-height clock
 clock_antialias    = true
+date_font          = "6x10.bdf"   # the date row, e.g. "Mon September 28"
+small_font         = "4x6.bdf"    # the reserved bottom line
 ```
+
+The date is a size up from the bottom line and spells the month out, which
+costs nothing: the time is limited by the panel's **width**, so giving the
+date row four more pixels of height leaves the digits at exactly 36px either
+way. Set `date_font = "4x6.bdf"` to go back to the smaller row.
 
 They're deliberately different faces. The full-screen clock is limited by
 **width**, so a narrower face yields taller digits; the compact clock is capped

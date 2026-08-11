@@ -99,6 +99,11 @@ class Renderer:
         self.small_font = backend.load_font(font_dir / cfg.get("display.small_font", "4x6.bdf"))
         if self.small_font is None and self.entry_fonts:
             self.small_font = self.entry_fonts[-1]
+        # The date gets its own face, a step up from the toast line: it is
+        # read from across the room like the time, not squinted at.
+        self.date_font = backend.load_font(font_dir / cfg.get("display.date_font", "6x10.bdf"))
+        if self.date_font is None:
+            self.date_font = self.small_font
         if not self.entry_fonts and self.small_font is None:
             log.warning("no fonts loaded from %s; only the clock digits will draw", font_dir)
 
@@ -190,7 +195,11 @@ class Renderer:
 
         visible = entries[: int(cfg.get("entries.max_visible", 8))]
         toast = status.get("toast")
-        toast_h = (self.backend.font_height(self.small_font) + 1) if (toast and self.small_font) else 0
+        # The bottom line belongs to the spoken-command echo and nothing else,
+        # reserved whether or not one is showing.  Giving the row back when
+        # the toast expires would shunt the entire layout down a few pixels
+        # every time a command finished, which reads as the screen twitching.
+        toast_h = (self.backend.font_height(self.small_font) + 1) if self.small_font else 0
         usable_h = self.height - toast_h
 
         if visible:
@@ -227,8 +236,13 @@ class Renderer:
         clock_rgb = cfg.color("display.clock_color")
         date_rgb = cfg.color("display.date_color")
 
-        small_h = self.backend.font_height(self.small_font) if self.small_font else 0
-        date_h = (small_h + 1) if show_date else 0
+        # The bottom row of the clock box carries the date and the meridiem.
+        # It is reserved when either is present, so a suffix with the date
+        # switched off cannot land on top of the digits.
+        date_font = self.date_font or self.small_font
+        bottom_row = (not compact) and (show_date or bool(suffix))
+        date_fh = self.backend.font_height(date_font) if date_font else 0
+        date_h = (date_fh + 1) if bottom_row else 0
 
         # A bar under the time showing how much of the minute is left. It
         # replaces the blinking colon: it carries strictly more information
@@ -281,15 +295,23 @@ class Renderer:
             baseline = min(ty + digit_h, y + box_h - 1)
             self.draw_text(self.small_font, end_x + 3, baseline, clock_rgb, suffix)
 
-        if self.small_font and not compact:
-            baseline = y + h - 1
+        if bottom_row and date_font is not None:
+            # Sit the whole glyph cell inside the reserved row.  Drawing from
+            # the bottom edge would push descenders out of it — the "p" in
+            # "September" hangs two pixels below the baseline at 6x10, and
+            # would land in the line reserved for spoken commands.
+            baseline = y + h - date_h + self.backend.font_baseline(date_font)
+            # The meridiem is right-aligned, so the date is centred in what is
+            # left rather than in the full width — otherwise a long month runs
+            # underneath the PM.
+            sw = (self.text_width(date_font, suffix) + 2) if suffix else 0
             if show_date:
-                label = now.strftime("%a %b %-d")
-                dw = self.text_width(self.small_font, label)
-                self.draw_text(self.small_font, x + (w - dw) // 2, baseline, date_rgb, label)
+                label = now.strftime("%a %B %-d")
+                dw = self.text_width(date_font, label)
+                self.draw_text(date_font, x + max(0, (w - sw - dw) // 2),
+                               baseline, date_rgb, label)
             if suffix:
-                sw = self.text_width(self.small_font, suffix)
-                self.draw_text(self.small_font, x + w - sw - 1, baseline, clock_rgb, suffix)
+                self.draw_text(date_font, x + w - sw + 1, baseline, clock_rgb, suffix)
 
     def _draw_seconds_dots(
         self, center_x: int, y: int, height: int, second: int, compact: bool
@@ -434,11 +456,16 @@ class Renderer:
                 self.draw_text(self.small_font, 1, baseline, (110, 110, 110), more)
 
     def _draw_toast(self, text: str, rgb: RGB) -> None:
+        """The spoken-command echo, on the line reserved for it."""
         if not self.small_font:
             return
         h = self.backend.font_height(self.small_font)
-        self._fill(0, self.height - h - 1, self.width, h + 1, (0, 0, 0))
-        self.draw_text(self.small_font, 1, self.height - 1, rgb, text[:40])
+        top = self.height - h - 1
+        self._fill(0, top, self.width, h + 1, (0, 0, 0))
+        # Baselined from the top of the band, so descenders stay on the panel
+        # rather than being clipped by its bottom edge.
+        baseline = top + self.backend.font_baseline(self.small_font)
+        self.draw_text(self.small_font, 1, baseline, rgb, text[:40])
 
     def clear(self) -> None:
         self.backend.close()
