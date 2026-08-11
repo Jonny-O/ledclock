@@ -29,7 +29,7 @@ through the minute you are, and nothing on screen moves.
 On a fresh Raspberry Pi OS (64-bit, Bookworm or Trixie):
 
 ```bash
-git clone https://github.com/YOUR_USER/ledclock.git
+git clone https://github.com/Jonny-O/ledclock.git
 cd ledclock
 ./setup.sh
 ```
