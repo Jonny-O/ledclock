@@ -1,0 +1,188 @@
+# ledclock preferences
+#
+# Every key here is optional — anything you delete falls back to the built-in
+# default in ledclock/config.py.  Restart the service after editing:
+#     sudo systemctl restart ledclock
+
+[matrix]
+rows = 64
+cols = 128
+chain_length = 1
+parallel = 1
+
+# 'regular'          HUB75 ribbon jumpered straight to the Pi header (this build)
+# 'adafruit-hat'     Adafruit RGB Matrix HAT / Bonnet
+# 'adafruit-hat-pwm' ...with the GPIO4->GPIO18 jumper soldered
+hardware_mapping = "regular"
+
+brightness = 60
+
+# Pi 4 usually needs 3-5.  Raise it if the panel shows sparkle or ghosting,
+# lower it if the refresh rate is too low and the image flickers.
+gpio_slowdown = 4
+
+pwm_bits = 11
+pwm_lsb_nanoseconds = 130
+
+# Leave 0 unless your panel needs them (some P2 panels want row_address_type=0
+# and multiplexing=0, which is the common case for 128x64 1/32-scan).
+scan_mode = 0
+row_address_type = 0
+multiplexing = 0
+pixel_mapper = ""
+
+# Set true only if you could not disable onboard audio; costs image quality.
+disable_hardware_pulsing = false
+
+# If the panel stays completely dark but the Pi is clearly driving it, try
+# panel_type = "FM6126A" — a common driver chip on 128x64 P2 panels that needs
+# an init sequence. Leave "" otherwise.
+panel_type = ""
+
+# Swap if your panel's colours are wrong, e.g. "RBG".
+led_rgb_sequence = "RGB"
+
+# Keep false: the process stays root so buttons, buzzer and the state file
+# still work after the matrix initialises.
+drop_privileges = false
+
+[clock]
+hour_format = 12      # 12 or 24
+show_seconds = false
+show_date = true
+# The colon now stays lit; the seconds bar below shows the minute instead.
+blink_colon = false
+seconds_bar = true
+leading_zero = false
+
+[display]
+# Height the clock shrinks to (as a fraction of the panel) once any alarm or
+# timer is showing.  0.25 = top quarter.
+compact_clock_fraction = 0.25
+
+clock_color = [255, 176, 0]
+date_color = [90, 90, 90]
+alarm_color = [0, 190, 255]
+timer_color = [0, 235, 120]
+ringing_color = [255, 40, 40]
+expired_color = [110, 110, 110]
+heard_color = [200, 120, 255]
+
+fps = 20
+ring_flash_hz = 2.0
+toast_seconds = 3.0
+
+# 'hms'  -> a three minute timer reads 00:03:00
+# 'auto' -> a three minute timer reads 03:00, and hours appear only when used
+timer_format = "hms"
+
+# Outline font for the time itself. "" falls back to seven-segment digits.
+# `python -m ledclock --compare-fonts out/` renders every candidate.
+clock_font = "/usr/share/fonts/opentype/inter/InterDisplay-Black.otf"
+
+# The quarter-height clock has width to spare, so it gets a wider face.
+compact_clock_font = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+compact_clock_tracking = 0
+
+# Shade edge pixels using the panel's PWM. Smooths curves and diagonals;
+# set false for hard on/off pixels.
+clock_antialias = true
+
+# The bar under the time, showing seconds left in the minute. It spans the
+# width of the digits above it.
+seconds_bar_height = 2          # 1px in the compact clock regardless
+seconds_bar_gap = 2             # space between digits and bar
+seconds_bar_color = [255, 176, 0]
+seconds_bar_track_color = [46, 32, 0]
+seconds_bar_style = "deplete"   # 'deplete' empties; 'fill' grows
+
+# 60 dots, one per second, split into six groups of ten so you can read the
+# count in tens rather than estimating a fraction.
+seconds_bar_group_size = 10
+seconds_bar_dot_width = 1       # pixels per dot
+seconds_bar_dot_gap = 0         # gap between dots inside a group
+seconds_bar_group_gap = 2       # gap between the six groups (1 less when compact)
+
+font_dir = "rpi-rgb-led-matrix/fonts"
+entry_fonts = ["10x20.bdf", "9x18B.bdf", "7x13B.bdf", "6x10.bdf", "5x7.bdf", "4x6.bdf"]
+small_font = "4x6.bdf"
+
+[entries]
+# How long an alarm or timer stays on screen after it fires, in seconds.
+linger_seconds = 300
+# How long it flashes and buzzes before going quiet but staying on screen.
+ring_seconds = 30
+max_visible = 8
+
+[buzzer]
+# Flip to true once the piezo is wired.
+enabled = false
+pin = 13
+type = "passive"        # 'passive' = bare piezo (PWM); 'active' = self-driving module
+frequency_hz = 2730     # most piezo discs are loudest near 2.7 kHz
+duty_cycle = 50
+beat_on = 0.15
+beat_off = 0.35
+active_high = true
+
+[buttons]
+enabled = true
+pull_up = true          # wire the button between the GPIO pin and GND
+bounce_seconds = 0.05
+hold_seconds = 1.0
+brightness_levels = [20, 40, 60, 85, 100]
+snooze_minutes = 9
+
+# GPIO (BCM numbering) -> action.
+#
+# Available actions:
+#   dismiss             silence the ringing entry   (hold = silence all)
+#   dismiss_all         silence everything
+#   snooze              push ringing entries back by snooze_minutes
+#   cycle_brightness    step through brightness_levels
+#   toggle_hour_format  flip 12h <-> 24h
+#   add_minute          +1 minute to the top entry
+#   pause_resume        pause/resume the first timer
+#   cancel_last         delete the most recently created entry
+#
+# With parallel = 1 the matrix occupies GPIO 4, 7, 8, 9, 10, 11, 15, 17, 18,
+# 22, 23, 24, 25 and 27 — so 5, 6, 12, 13, 14, 16, 19, 20, 21 and 26 are free.
+# Raising `parallel` claims 5, 6, 12, 13, 16, 19, 20, 21 and 26 as well.
+[buttons.pins]
+5 = "dismiss"
+6 = "snooze"
+16 = "cycle_brightness"
+26 = "cancel_last"
+
+[voice]
+enabled = true
+wake_phrase = "clock clock clock"
+
+# How many "clock"s in a row must land before it wakes.  3 is strict, 2 is
+# more forgiving when the mic clips the first word.
+wake_min_repeats = 2
+
+command_timeout = 8.0
+model_path = "models/vosk-model-small-en-us-0.15"
+
+# 'plughw:' (not 'hw:') lets ALSA resample the mic's 48 kHz down to 16 kHz.
+# Run `python -m ledclock --list-audio` to see the card numbers.
+device = "plughw:CARD=Device,DEV=0"
+sample_rate = 16000
+
+# Restrict recognition to the command vocabulary.  Big accuracy win on the
+# small model; set false if you want to experiment with free-form phrasing.
+use_grammar = true
+
+[control]
+# Local Unix socket that lets you drive the clock without speaking:
+#     python -m ledclock --send "set a timer for 3 minutes"
+# Local only — nothing listens on the network.
+enabled = true
+socket = "/run/ledclock.sock"
+group = "gpio"
+
+[state]
+# Alarms and timers survive a restart.
+path = "state.json"
+restore_on_start = true

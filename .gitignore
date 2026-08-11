@@ -1,0 +1,20 @@
+# Python virtualenv — rebuilt by setup.sh
+.venv/
+__pycache__/
+*.py[cod]
+
+# Vendored third-party library, cloned and compiled by setup.sh (~52 MB)
+rpi-rgb-led-matrix/
+
+# Vosk speech model, downloaded by setup.sh (~68 MB)
+models/
+
+# Runtime state: live alarms and timers
+state.json
+
+# Generated preview and font-comparison images
+preview/
+*.tmp
+
+# lgpio notification FIFOs
+.lgd-nfy*

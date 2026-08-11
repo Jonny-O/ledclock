@@ -1,0 +1,35 @@
+[Unit]
+Description=LED matrix clock with voice-controlled alarms and timers
+Documentation=file:__LEDCLOCK_DIR__/README.md
+# The USB mic and the panel both need to be up before we start.
+After=network-online.target sound.target
+Wants=sound.target
+
+[Service]
+Type=simple
+# rpi-rgb-led-matrix needs root to map the GPIO peripheral, and we stay root
+# so the button/buzzer pins and the state file remain writable.
+User=root
+WorkingDirectory=__LEDCLOCK_DIR__
+ExecStart=__LEDCLOCK_DIR__/.venv/bin/python -m ledclock \
+    --config __LEDCLOCK_DIR__/config.toml \
+    --log-level INFO
+Restart=on-failure
+RestartSec=3
+# The app saves state and blanks the panel on SIGTERM; give it a moment.
+KillSignal=SIGTERM
+TimeoutStopSec=10
+# Signal only the main process, so it can shut its own arecord child down.
+# The default (control-group) kills arecord first and the capture thread then
+# reports a spurious read error on every restart.
+KillMode=mixed
+
+# Keep the render loop responsive against other work on the Pi.
+Nice=-5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ledclock
+
+[Install]
+WantedBy=multi-user.target
