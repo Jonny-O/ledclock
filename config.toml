@@ -64,6 +64,7 @@ clock_color = [255, 176, 0]
 date_color = [90, 90, 90]
 alarm_color = [0, 190, 255]
 timer_color = [0, 235, 120]
+stopwatch_color = [170, 110, 255]
 ringing_color = [255, 40, 40]
 expired_color = [110, 110, 110]
 heard_color = [200, 120, 255]
@@ -173,6 +174,27 @@ sample_rate = 16000
 # Restrict recognition to the command vocabulary.  Big accuracy win on the
 # small model; set false if you want to experiment with free-form phrasing.
 use_grammar = true
+
+# Software boost on the captured samples, for when the ALSA capture control is
+# already maxed and you still have to lean towards the mic.  1.0 = untouched.
+# Measure before changing it — this clips headroom, it cannot create any:
+#     python -m ledclock --mic-level
+gain = 1.0
+
+[power]
+# "clock clock clock, shut down" / "reboot".
+enabled = true
+
+# Ask before acting.  The clock puts "shutdown? say yes" on the panel and only
+# a spoken "yes" within the window goes through; anything else stands it down.
+# This is what makes the feature safe to leave on — turn it off and the first
+# thing the mic mishears costs you a walk to the plug.
+confirm = true
+confirm_seconds = 10.0
+
+# The clock runs as root, so these need no sudo.
+shutdown_command = ["systemctl", "poweroff"]
+reboot_command = ["systemctl", "reboot"]
 
 [control]
 # Local Unix socket that lets you drive the clock without speaking:

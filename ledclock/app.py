@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import signal
+import subprocess
 import threading
 import time
 from datetime import datetime, timedelta
@@ -19,7 +20,7 @@ from .buzzer import Buzzer
 from .config import Config
 from .control import DEFAULT_SOCKET, ControlServer
 from .entries import (
-    Alarm, EntryState, EntryStore, Timer, format_clock_time, format_duration,
+    EntryState, EntryStore, RunningEntry, format_clock_time, format_duration,
 )
 from .intents import Intent
 from .voice import VoiceListener
@@ -66,6 +67,11 @@ class ClockApp:
         self._listening = False
         self._lock = threading.Lock()
 
+        # A power command waits here for confirmation rather than firing on
+        # the first thing that sounded like "shut down".
+        self._power_pending: str | None = None
+        self._power_until = 0.0
+
         levels = cfg.get("buttons.brightness_levels", [20, 40, 60, 85, 100])
         self._brightness_levels = [int(v) for v in levels] or [60]
         self._brightness_idx = self._nearest_brightness(int(cfg.get("matrix.brightness", 60)))
@@ -73,11 +79,16 @@ class ClockApp:
 
     # ---------------- feedback ----------------
 
-    def toast(self, text: str, color: tuple[int, int, int] | None = None) -> None:
+    def toast(
+        self,
+        text: str,
+        color: tuple[int, int, int] | None = None,
+        seconds: float | None = None,
+    ) -> None:
         with self._lock:
             self._toast = text
             self._toast_color = color or self.cfg.color("display.heard_color")
-            self._toast_until = time.monotonic() + self._toast_seconds
+            self._toast_until = time.monotonic() + (seconds or self._toast_seconds)
 
     def _current_toast(self) -> str | None:
         with self._lock:
@@ -96,6 +107,17 @@ class ClockApp:
     # ---------------- intent dispatch ----------------
 
     def _on_intent(self, intent: Intent) -> None:
+        # An armed power command swallows the next utterance: only an explicit
+        # yes goes through, and anything else stands the clock back down.
+        if self._power_armed():
+            if intent.action == "confirm":
+                self._power_go()
+                return
+            self._power_pending = None
+            if intent.action in ("deny", "unknown", "confirm"):
+                self.toast("cancelled")
+                return
+
         handler = getattr(self, f"_do_{intent.action}", None)
         if handler is None:
             self.toast(f"? {intent.text}"[:40], (200, 80, 80))
@@ -126,6 +148,11 @@ class ClockApp:
         )
         self.buzzer.chirp()
 
+    def _do_set_stopwatch(self, intent: Intent) -> None:
+        watch = self.store.add_stopwatch()
+        self.toast(f"+ {watch.name}", self.cfg.color("display.stopwatch_color"))
+        self.buzzer.chirp()
+
     def _do_cancel(self, intent: Intent) -> None:
         entry = self.store.find(intent.target)
         if entry is None:
@@ -154,7 +181,7 @@ class ClockApp:
 
     def _do_pause(self, intent: Intent) -> None:
         entry = self.store.find(intent.target)
-        if isinstance(entry, Timer):
+        if isinstance(entry, RunningEntry):
             entry.pause(datetime.now())
             self.toast(f"|| {entry.name}")
         else:
@@ -162,7 +189,7 @@ class ClockApp:
 
     def _do_resume(self, intent: Intent) -> None:
         entry = self.store.find(intent.target)
-        if isinstance(entry, Timer):
+        if isinstance(entry, RunningEntry):
             entry.resume(datetime.now())
             self.toast(f"> {entry.name}")
         else:
@@ -192,9 +219,59 @@ class ClockApp:
 
     def _do_status(self, intent: Intent) -> None:
         entries = self.store.all()
-        alarms = sum(1 for e in entries if e.kind == "alarm")
-        timers = len(entries) - alarms
-        self.toast(f"{alarms} alarm {timers} timer")
+        counts = {"alarm": 0, "timer": 0, "stopwatch": 0}
+        for entry in entries:
+            counts[entry.kind] = counts.get(entry.kind, 0) + 1
+        parts = [f"{counts['alarm']}a", f"{counts['timer']}t"]
+        if counts["stopwatch"]:
+            parts.append(f"{counts['stopwatch']}w")
+        self.toast(" ".join(parts))
+
+    # ---------------- power ----------------
+
+    def _power_armed(self) -> bool:
+        return bool(self._power_pending) and time.monotonic() < self._power_until
+
+    def _do_power(self, intent: Intent) -> None:
+        mode = intent.extras.get("mode", "shutdown")
+        if not self.cfg.get("power.enabled", True):
+            self.toast("? power commands off", (200, 80, 80))
+            return
+        self._power_pending = mode
+        if not self.cfg.get("power.confirm", True):
+            self._power_until = time.monotonic() + 1e9
+            self._power_go()
+            return
+        window = float(self.cfg.get("power.confirm_seconds", 10.0))
+        self._power_until = time.monotonic() + window
+        # The prompt stays up exactly as long as the answer is accepted, so
+        # the question never vanishes while the user is still deciding.
+        self.toast(f"{mode}? say yes", (255, 80, 80), seconds=window)
+
+    def _do_confirm(self, intent: Intent) -> None:
+        # Reached only when nothing is armed; _on_intent handles the live case.
+        self.toast("? nothing to confirm", (200, 80, 80))
+
+    def _do_deny(self, intent: Intent) -> None:
+        pass  # Nothing pending, nothing to say.
+
+    def _power_go(self) -> None:
+        mode, self._power_pending = self._power_pending, None
+        key = "power.reboot_command" if mode == "reboot" else "power.shutdown_command"
+        cmd = [str(a) for a in (self.cfg.get(key) or [])]
+        if not cmd:
+            self.toast(f"? no {mode} command", (200, 80, 80))
+            return
+        log.warning("%s requested: %s", mode, " ".join(cmd))
+        self.toast(f"{mode}...", (255, 80, 80))
+        self.store.save(self.state_path)
+        try:
+            # Fire and forget: systemctl hands the job to pid 1 and returns,
+            # so we stay up rendering until systemd stops us in turn.
+            subprocess.Popen(cmd, start_new_session=True)
+        except OSError as exc:
+            log.error("%s failed: %s", mode, exc)
+            self.toast(f"? {mode} failed", (200, 80, 80))
 
     # ---------------- buttons ----------------
 
@@ -233,7 +310,7 @@ class ClockApp:
                 self.toast(f"{entries[0].name} +1m")
         elif action == "pause_resume":
             for entry in self.store.all():
-                if isinstance(entry, Timer):
+                if isinstance(entry, RunningEntry):
                     if entry.state is EntryState.PAUSED:
                         entry.resume(datetime.now())
                         self.toast(f"> {entry.name}")

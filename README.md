@@ -3,10 +3,10 @@
 A voice-controlled LED matrix clock for a Raspberry Pi 4 driving a 128×64 P2
 HUB75 panel.
 
-The time is drawn large enough to read across a room. When you add alarms or
-timers the clock shrinks to the top quarter of the panel and the entries list
-below it, in the largest font that still fits. Entries disappear five minutes
-after they fire.
+The time is drawn large enough to read across a room. When you add alarms,
+timers or stopwatches the clock shrinks to the top quarter of the panel and
+the entries list below it, in the largest font that still fits. Timers and
+alarms disappear five minutes after they fire.
 
 ```
    ┌───────────────────────────────┐   ┌───────────────────────────────┐
@@ -15,7 +15,8 @@ after they fire.
    │ ▪▪▪▪ ▪▪▪▪ ▪▪▪▪ ▪▪·· ···· ···· │   │───────────────────────────────│
    │       Mon Aug 10          PM  │   │  Alarm1              8:59pm   │
    └───────────────────────────────┘   │  Timer1            00:03:00   │
-              idle                     └───────────────────────────────┘
+              idle                     │  Watch1            00:12:41   │
+                                       └───────────────────────────────┘
                                                  with entries
 ```
 
@@ -69,17 +70,65 @@ in the same breath as the wake phrase or follow it:
 | --- | --- |
 | `set an alarm for 4pm` | `Alarm1  4:00pm` |
 | `set a timer for 3 minutes` | `Timer1  00:03:00` |
+| `start a stopwatch` | `Watch1  00:00:00`, counting up |
 | `set an alarm for quarter past seven` | next 7:15 |
 | `set a timer for one hour thirty minutes` | `01:30:00` |
 | `cancel alarm one` / `delete timer two` | removes it |
 | `cancel all timers` | clears every timer |
 | `add ten minutes to timer one` | extends it |
-| `pause timer one` / `resume timer one` | holds the countdown |
+| `pause timer one` / `resume timer one` | holds the count |
 | `snooze` | pushes anything ringing back 9 minutes |
 | `dismiss` | silences what's ringing |
+| `shut down` / `reboot` | asks first — see [Power](#power) |
 
 Times with no am/pm ("set an alarm for five") resolve to whichever reading
 comes soonest. An alarm for a time already past today rolls to tomorrow.
+
+### Counting up
+
+A stopwatch is the timer run backwards, for when you don't know in advance how
+long the thing will take:
+
+```
+"clock clock clock, start a stopwatch"
+"clock clock clock, pause the stopwatch"
+"clock clock clock, cancel watch one"
+```
+
+It differs from a timer in three ways, all of which follow from having no
+deadline: it never rings, it never disappears on its own — a timer lingers
+five minutes after firing, a stopwatch stays until you cancel it — and it sorts
+*below* the alarms and timers, which do have something to count towards.
+
+The panel labels it `Watch1` rather than `Stopwatch1`, so the row is the same
+six characters as `Alarm1` and `Timer1` and a stopwatch never pushes the entry
+font down a size. Both names work when you speak to it.
+
+`add ten minutes to watch one` moves the reading itself, since there is no
+deadline to move instead. It will not go below zero.
+
+### Power
+
+`shut down`, `power off` and `reboot` do what they say, but never on one
+utterance. The panel asks `shutdown? say yes` and waits ten seconds:
+
+```
+"clock clock clock, shut down"     ->  panel: shutdown? say yes
+"clock clock clock, yes"           ->  goes down
+```
+
+Only `yes` gets through. Saying "shut down" a second time does not count, and
+any other command — including `no` — stands it down and is then obeyed
+normally. If the window passes, a stray "yes" does nothing.
+
+That gate is the whole reason this is safe to leave enabled, because the
+failure mode is a walk to the plug. `[power] confirm = false` removes it and
+`enabled = false` removes the commands altogether.
+
+Words that overlap with real commands keep their old meanings, and the
+self-tests hold them there: `shut up` and `turn it off` still dismiss, `stop
+timer one` still cancels a timer, and `restart` only means reboot when it is
+the entire sentence.
 
 Recognition is **fully offline** — Vosk with a small English model. Nothing
 leaves the Pi, and it keeps working when the WiFi drops into autoAP mode.
@@ -87,6 +136,55 @@ leaves the Pi, and it keeps working when the WiFi drops into autoAP mode.
 Accuracy comes from restricting the recogniser to the command vocabulary
 (`voice.use_grammar`). Set it `false` to experiment with free-form phrasing,
 at a noticeable cost in reliability.
+
+### Hearing you further away
+
+Measure before changing anything. The meter reports peak and RMS level while
+you talk, so you can walk to where you actually stand and see what the
+recogniser is being given:
+
+```bash
+sudo systemctl stop ledclock          # it holds the mic
+python -m ledclock --mic-level        # speak for 15s from across the room
+sudo systemctl start ledclock
+```
+
+Speech that recognises reliably peaks around **-12 dBFS**. What matters more
+than the absolute number is the gap between your voice and the room: below
+about 20 dB of separation, no amount of gain will help, because gain raises
+the room along with you.
+
+In rough order of how much they buy you:
+
+1. **Move the mic, not the gain.** Doubling the distance costs 6 dB. Getting
+   the capsule off the desk — away from the surface that reflects everything —
+   and pointed at where people stand routinely beats every setting below.
+2. **Raise the ALSA capture control**, which has a real preamp behind it:
+   `amixer -c Device sset Mic 100% cap`, then `sudo alsactl store`. This is
+   already at 91% here. Check `Auto Gain Control` is on with `amixer -c Device`.
+3. **`voice.gain`** multiplies the samples in software. It is the last resort,
+   not the first: it cannot add information the capsule never captured, and it
+   amplifies the noise floor equally. Useful when the capture control is
+   maxed and you are still 6-10 dB short. `--mic-level` suggests a value.
+4. **A better microphone.** This is usually the real answer. A generic C-Media
+   dongle with an electret capsule is a near-field device; it was never going
+   to do room pickup. A four-mic array with beamforming is a different
+   category of thing, not a louder version of the same one.
+
+   ⚠️ **Get a USB one.** The ReSpeaker 2-Mic and 4-Mic *HATs* are I²S and use
+   GPIO 18, 19, 20 and 21 — GPIO 18 is one of the pins the HUB75 panel drives.
+   They physically cannot coexist with this clock. USB arrays (ReSpeaker USB
+   Mic Array, or a PS3 Eye, which is class-compliant and cheap) have no such
+   conflict.
+
+5. **A bigger language model.** `vosk-model-en-us-0.22-lgraph` is ~128 MB
+   against the small model's 40 MB and handles reverberant far-field speech
+   noticeably better. It still fits a 2 GB Pi alongside the panel and still
+   supports the grammar. Drop it in `models/` and repoint `voice.model_path`.
+
+Two things that are *not* worth doing: lowering `wake_min_repeats` to 1, which
+trades range for false wake-ups; and raising `voice.gain` past about 4, which
+is where the noise floor starts producing phantom commands.
 
 ## Driving it without speaking
 
@@ -115,6 +213,9 @@ python -m ledclock --compare-fonts out/
 
 # Which capture devices exist, and which are we using?
 python -m ledclock --list-audio
+
+# How loud is the mic actually hearing you?  (Stop the service first.)
+python -m ledclock --mic-level
 ```
 
 ## Preferences
@@ -171,7 +272,7 @@ the GPIO pin directly.
 
 | File | Role |
 | --- | --- |
-| `entries.py` | `Alarm` / `Timer` and the thread-safe store; the whole lifecycle state machine |
+| `entries.py` | `Alarm` / `Timer` / `Stopwatch` and the thread-safe store; the whole lifecycle state machine |
 | `intents.py` | Speech text → structured commands; also defines the recogniser vocabulary |
 | `display.py` | Layout only — clock face sizing, font ladder for the entry rows |
 | `textrender.py` | Outline-font rasterising with fixed digit cells, cached |
@@ -182,7 +283,8 @@ the GPIO pin directly.
 | `app.py` | Run loop; the only place display state is mutated |
 
 Timing is all wall-clock based, so a restart or an NTP step never drifts a
-countdown. Alarms and timers are saved to `state.json` and restored on start.
+count. Everything on screen is saved to `state.json` and restored on start,
+including a stopwatch mid-count.
 
 ### The clock face
 
@@ -292,8 +394,10 @@ and stays root so the button pins and state file remain writable.
 | Sparkle, ghosting, flicker | raise `gpio_slowdown` (3–5 on a Pi 4) |
 | Refuses to start, mentions sound | `snd_bcm2835` got loaded again |
 | Bottom half wrong / rows doubled | `multiplexing` or `row_address_type` |
-| Voice never triggers | `wake_min_repeats = 1`, and check `--list-audio` |
-| Voice triggers by itself | `wake_min_repeats = 3` |
+| Voice never triggers | check `--list-audio`, then `--mic-level` |
+| Only works up close | see [Hearing you further away](#hearing-you-further-away) |
+| Voice triggers by itself | `wake_min_repeats = 3`, and lower `voice.gain` |
+| It shut down on its own | `[power] confirm` got turned off; put it back |
 
 ## License
 

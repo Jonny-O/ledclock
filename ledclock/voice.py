@@ -14,13 +14,16 @@ command, so both of these work:
 
 from __future__ import annotations
 
+import array
 import json
 import logging
+import math
+import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
-from pathlib import Path
 from typing import Callable
 
 from . import intents
@@ -29,6 +32,25 @@ from .config import Config
 log = logging.getLogger(__name__)
 
 CHUNK_BYTES = 4000  # ~125 ms of 16 kHz mono S16_LE
+FULL_SCALE = 32768.0
+
+
+def amplify(data: bytes, gain: float) -> bytes:
+    """Scale 16-bit samples, clamping instead of wrapping.
+
+    Wrapping would turn a loud syllable into white noise, which is far worse
+    for recognition than the flat top clamping gives you.
+    """
+    samples = array.array("h")
+    samples.frombytes(data)
+    for i, sample in enumerate(samples):
+        scaled = int(sample * gain)
+        samples[i] = 32767 if scaled > 32767 else -32768 if scaled < -32768 else scaled
+    return samples.tobytes()
+
+
+def _dbfs(value: float) -> float:
+    return 20.0 * math.log10(value / FULL_SCALE) if value >= 1.0 else -90.0
 
 
 class VoiceListener:
@@ -52,6 +74,7 @@ class VoiceListener:
         self.command_timeout = float(c.get("command_timeout", 8.0))
         self.use_grammar = bool(c.get("use_grammar", True))
         self.arecord = str(c.get("arecord", "arecord"))
+        self.gain = max(0.1, float(c.get("gain", 1.0)))
 
         phrase = str(c.get("wake_phrase", "clock clock clock")).lower().split()
         self.wake_word = phrase[0] if phrase else "clock"
@@ -173,6 +196,9 @@ class VoiceListener:
                     f"arecord ended (rc={proc.poll()}): {err.decode(errors='replace').strip()}"
                 )
 
+            if self.gain != 1.0:
+                data = amplify(data, self.gain)
+
             if rec.AcceptWaveform(data):
                 text = json.loads(rec.Result()).get("text", "").strip()
                 if text:
@@ -235,3 +261,80 @@ class VoiceListener:
             self.on_intent(intent)
         except Exception:
             log.exception("intent dispatch failed for %r", text)
+
+
+def meter(cfg: Config, seconds: float = 15.0) -> int:
+    """Live capture-level meter, for setting mic gain from across the room.
+
+    Speech that recognises reliably peaks somewhere around -12 dBFS.  Much
+    quieter and Vosk is working from the noise floor; touching 0.0 means the
+    samples are clipping, which sounds loud and recognises badly.  Walk to
+    where you normally stand and watch the peak column.
+    """
+    listener = VoiceListener(cfg, lambda intent: None)
+    if shutil.which(listener.arecord) is None:
+        print(f"{listener.arecord} not found (install alsa-utils)")
+        return 1
+
+    print(f"device: {listener.device}   gain: x{listener.gain:g}")
+    print(f"speak normally from where you use the clock, for {seconds:.0f}s\n")
+    try:
+        proc = listener._spawn_arecord()
+    except OSError as exc:
+        print(f"could not start capture: {exc}")
+        return 1
+
+    loudest = 0.0
+    quietest = FULL_SCALE
+    end = time.monotonic() + seconds
+    # Redrawing one line is right at a terminal and unreadable in a pipe or a
+    # log, where every update would land as another wall of text.
+    live = sys.stdout.isatty()
+    next_line = 0.0
+    try:
+        while time.monotonic() < end:
+            data = proc.stdout.read(CHUNK_BYTES) if proc.stdout else b""
+            if not data:
+                err = (proc.stderr.read() if proc.stderr else b"") or b""
+                print(f"\ncapture stopped: {err.decode(errors='replace').strip()}")
+                print("if it says the device is busy, the clock already has the mic:")
+                print("  sudo systemctl stop ledclock   # then re-run, and start it after")
+                return 1
+            if listener.gain != 1.0:
+                data = amplify(data, listener.gain)
+            samples = array.array("h")
+            samples.frombytes(data)
+            peak = float(max(abs(s) for s in samples))
+            rms = math.sqrt(sum(float(s) * s for s in samples) / len(samples))
+            loudest = max(loudest, peak)
+            quietest = min(quietest, rms)
+            now = time.monotonic()
+            if not live and now < next_line:
+                continue
+            next_line = now + 1.0
+            bar = "#" * max(0, min(40, round((_dbfs(peak) + 60.0) / 60.0 * 40)))
+            line = (f"peak {_dbfs(peak):6.1f} dBFS  rms {_dbfs(rms):6.1f} dBFS "
+                    f"|{bar:<40}|")
+            print(f"\r{line}" if live else line, end="" if live else "\n", flush=True)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        proc.terminate()
+
+    peak_db, floor_db = _dbfs(loudest), _dbfs(quietest)
+    print(f"\n\nloudest peak {peak_db:.1f} dBFS, quietest rms {floor_db:.1f} dBFS "
+          f"(headroom over the floor: {peak_db - floor_db:.0f} dB)")
+    if peak_db > -1.0:
+        print("clipping — lower the capture control or voice.gain")
+    elif peak_db < -24.0:
+        card = re.search(r"CARD=([^,]+)", listener.device)
+        print("too quiet for reliable recognition.  Raise the ALSA capture control")
+        print("first — it has a real preamp behind it — and only then voice.gain:")
+        print(f"  amixer -c {card.group(1) if card else 0} sset Mic 100% cap")
+        print(f"  voice.gain = {min(8.0, 10 ** ((-12.0 - peak_db) / 20.0)):.1f}  # if still quiet")
+    else:
+        print("healthy level")
+    if peak_db - floor_db < 20.0:
+        print("note: little separation between speech and the room — the limit here is")
+        print("      the microphone, not the gain.  See 'Hearing you further away'.")
+    return 0

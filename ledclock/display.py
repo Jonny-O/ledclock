@@ -387,8 +387,10 @@ class Renderer:
 
         alarm_rgb = cfg.color("display.alarm_color")
         timer_rgb = cfg.color("display.timer_color")
+        watch_rgb = cfg.color("display.stopwatch_color")
         ring_rgb = cfg.color("display.ringing_color")
         exp_rgb = cfg.color("display.expired_color")
+        by_kind = {"alarm": alarm_rgb, "stopwatch": watch_rgb}
 
         rows: list[tuple[str, str, RGB]] = []
         for entry in entries:
@@ -397,7 +399,7 @@ class Renderer:
             elif entry.state is EntryState.EXPIRED:
                 rgb = exp_rgb
             else:
-                rgb = alarm_rgb if entry.kind == "alarm" else timer_rgb
+                rgb = by_kind.get(entry.kind, timer_rgb)
                 if entry.state is EntryState.PAUSED:
                     rgb = tuple(v // 2 for v in rgb)
             detail = entry.detail(now, hour_format, timer_format)

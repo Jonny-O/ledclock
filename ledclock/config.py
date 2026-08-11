@@ -106,6 +106,7 @@ DEFAULTS: dict[str, Any] = {
         "date_color": [90, 90, 90],
         "alarm_color": [0, 190, 255],
         "timer_color": [0, 235, 120],
+        "stopwatch_color": [170, 110, 255],
         "ringing_color": [255, 40, 40],
         "expired_color": [110, 110, 110],
         "heard_color": [200, 120, 255],
@@ -165,6 +166,23 @@ DEFAULTS: dict[str, Any] = {
         # accuracy on a small model; set false to allow free-form speech.
         "use_grammar": True,
         "arecord": "arecord",
+        # Software boost applied to the captured samples before recognition,
+        # for when the ALSA capture control is already at its ceiling and the
+        # speaker is still across the room.  1.0 = untouched.  Check the
+        # headroom first with `--mic-level`: this clips, it cannot invent it.
+        "gain": 1.0,
+    },
+    "power": {
+        # Voice-controlled shutdown and reboot.
+        "enabled": True,
+        # Require a spoken "yes" before acting.  This is what makes the
+        # feature safe to leave on: a misheard "shut down" only ever puts a
+        # question on the panel.  Turning it off costs a walk to the plug the
+        # first time the mic mishears something.
+        "confirm": True,
+        "confirm_seconds": 10.0,
+        "shutdown_command": ["systemctl", "poweroff"],
+        "reboot_command": ["systemctl", "reboot"],
     },
     "control": {
         # Local Unix socket for `--send`, so the clock can be driven without

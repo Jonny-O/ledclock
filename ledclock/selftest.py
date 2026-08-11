@@ -73,6 +73,39 @@ CASES = [
     ("snooze", "snooze", lambda i: True, "snooze"),
     ("dismiss", "dismiss", lambda i: True, "dismiss"),
 
+    # --- stopwatch ------------------------------------------------------
+    ("start a stopwatch", "set_stopwatch", lambda i: True, "start a stopwatch"),
+    ("start a watch", "set_stopwatch", lambda i: True, "'watch' works too"),
+    ("count up", "set_stopwatch", lambda i: True, "count up"),
+    ("start counting", "set_stopwatch", lambda i: True, "start counting"),
+    ("cancel stopwatch one", "cancel", lambda i: i.target == "stopwatch1", "cancel stopwatch1"),
+    # The panel says "Watch1", so that is what people will say back to it.
+    ("cancel watch one", "cancel", lambda i: i.target == "stopwatch1", "'watch one' resolves"),
+    ("cancel watch two", "cancel", lambda i: i.target == "stopwatch2", "'watch two' resolves"),
+    ("pause the stopwatch", "pause", lambda i: i.target == "stopwatch", "pause stopwatch"),
+    ("resume watch one", "resume", lambda i: i.target == "stopwatch1", "resume watch1"),
+    ("cancel all stopwatches", "clear", lambda i: i.kind == "stopwatch", "clear stopwatches"),
+    ("add five minutes to watch one", "add_time",
+     lambda i: i.target == "stopwatch1" and _mins(i) == 5, "+5m watch1"),
+    # A stopwatch must not swallow the timer phrasings.
+    ("set a timer for three minutes", "set_timer", lambda i: _mins(i) == 3, "timer still wins"),
+
+    # --- power ----------------------------------------------------------
+    ("shut down", "power", lambda i: i.extras["mode"] == "shutdown", "shut down"),
+    ("shutdown", "power", lambda i: i.extras["mode"] == "shutdown", "one word"),
+    ("power off", "power", lambda i: i.extras["mode"] == "shutdown", "power off"),
+    ("power down", "power", lambda i: i.extras["mode"] == "shutdown", "power down"),
+    ("reboot", "power", lambda i: i.extras["mode"] == "reboot", "reboot"),
+    ("restart", "power", lambda i: i.extras["mode"] == "reboot", "restart"),
+    ("yes", "confirm", lambda i: True, "confirm"),
+    ("no", "deny", lambda i: True, "deny"),
+    # Half a power phrase must not cut the power.  These words all overlap
+    # with real commands, and each must keep the meaning it already had.
+    ("shut up", "dismiss", lambda i: True, "'shut up' still dismisses"),
+    ("turn it off", "dismiss", lambda i: True, "'off' alone still dismisses"),
+    ("stop timer one", "cancel", lambda i: i.target == "timer1", "'stop' is not shutdown"),
+    ("restart timer one", "unknown", lambda i: True, "'restart timer' is not a reboot"),
+
     # --- garbage should not become a command ----------------------------
     ("the quick brown fox", "unknown", lambda i: True, "nonsense rejected"),
     ("", "unknown", lambda i: True, "empty rejected"),
@@ -157,7 +190,169 @@ def run_lifecycle_checks(verbose: bool = True) -> bool:
     revived.add(timedelta(minutes=5), now=t0 + timedelta(minutes=1, seconds=1))
     check("adding time un-rings it", revived.state is EntryState.PENDING, revived.state)
 
+    # --- stopwatch: counts up, never fires, never lingers away -------------
+    store3 = EntryStore(linger_seconds=300.0, ring_seconds=30.0)
+    watch = store3.add_stopwatch()
+    watch.started_at = t0
+
+    check("stopwatch is labelled Watch1", watch.name == "Watch1", watch.name)
+    check("stopwatch starts at zero", watch.detail(t0, 12, "hms") == "00:00:00",
+          watch.detail(t0, 12, "hms"))
+    check("stopwatch counts up",
+          watch.detail(t0 + timedelta(minutes=2, seconds=5), 12, "hms") == "00:02:05",
+          watch.detail(t0 + timedelta(minutes=2, seconds=5), 12, "hms"))
+
+    fired = store3.tick(t0 + timedelta(hours=2))
+    check("stopwatch never fires", fired == [] and watch.state is EntryState.PENDING,
+          f"{fired} {watch.state}")
+    check("stopwatch never lingers away", len(store3) == 1, len(store3))
+    check("stopwatch keeps running past an hour",
+          watch.detail(t0 + timedelta(hours=2), 12, "hms") == "02:00:00",
+          watch.detail(t0 + timedelta(hours=2), 12, "hms"))
+
+    watch.pause(t0 + timedelta(minutes=3))
+    check("stopwatch pauses",
+          watch.detail(t0 + timedelta(minutes=9), 12, "hms") == "00:03:00",
+          watch.detail(t0 + timedelta(minutes=9), 12, "hms"))
+    watch.resume(t0 + timedelta(minutes=9))
+    check("stopwatch resumes where it stopped",
+          watch.detail(t0 + timedelta(minutes=11), 12, "hms") == "00:05:00",
+          watch.detail(t0 + timedelta(minutes=11), 12, "hms"))
+
+    # "add ten minutes to watch one" shifts the reading, not a deadline.
+    watch.add(timedelta(minutes=10), now=t0 + timedelta(minutes=11))
+    check("adding time advances the count",
+          watch.detail(t0 + timedelta(minutes=11), 12, "hms") == "00:15:00",
+          watch.detail(t0 + timedelta(minutes=11), 12, "hms"))
+    watch.add(timedelta(minutes=-99), now=t0 + timedelta(minutes=11))
+    check("the count cannot go negative",
+          watch.detail(t0 + timedelta(minutes=11), 12, "hms") == "00:00:00",
+          watch.detail(t0 + timedelta(minutes=11), 12, "hms"))
+
+    # "watch one" has to reach it: the panel never says "stopwatch".
+    check("found by its canonical key", store3.find("stopwatch1") is watch)
+    check("found by the name on screen", store3.find("watch1") is watch)
+    check("found by bare kind", store3.find("watch") is watch)
+
+    # A stopwatch has no deadline, so it must not out-rank things that do.
+    store3.add_timer(timedelta(hours=4))
+    order = [e.name for e in store3.all()]
+    check("counters sort below countdowns", order == ["Timer1", "Watch1"], str(order))
+
+    # It must survive a restart mid-count.
+    import tempfile
+    from pathlib import Path as _Path
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _Path(tmp) / "state.json"
+        store3.save(path)
+        reloaded = EntryStore(linger_seconds=300.0, ring_seconds=30.0)
+        reloaded.load(path)
+        again_watch = reloaded.find("watch1")
+        check("stopwatch survives a save/load",
+              again_watch is not None and again_watch.name == "Watch1",
+              str([e.name for e in reloaded.all()]))
+        if again_watch is not None:
+            check("and keeps its reading",
+                  again_watch.elapsed(datetime.now()).total_seconds()
+                  - watch.elapsed(datetime.now()).total_seconds() < 1.0)
+
     print(f"\n{len(failures)} lifecycle failure(s)")
+    return not failures
+
+
+def run_power_checks(verbose: bool = True) -> bool:
+    """The confirmation gate in front of shutdown and reboot.
+
+    This is the only code path that can switch the machine off, and the only
+    one whose failure mode is a walk to the plug, so it is checked without
+    hardware: the app object is built field by field rather than constructed,
+    since a real one wants the panel.
+    """
+    import time as _time
+
+    from .app import ClockApp
+    from .config import Config
+    from .entries import EntryStore
+    from .intents import parse
+
+    failures: list[str] = []
+
+    def check(label: str, condition: bool, detail: str = "") -> None:
+        if condition:
+            if verbose:
+                print(f"  ok    {label}")
+        else:
+            failures.append(label)
+            print(f"  FAIL  {label}{(' - ' + detail) if detail else ''}")
+
+    class _Buzzer:
+        def chirp(self):
+            pass
+
+    def make_app(armed: str | None = None, window: float = 10.0) -> ClockApp:
+        app = ClockApp.__new__(ClockApp)
+        app.cfg = Config.load()
+        app.store = EntryStore()
+        app.buzzer = _Buzzer()
+        app.toasts = []
+        app.fired = []
+        app.toast = lambda text, color=None, seconds=None: app.toasts.append(text)
+        app._power_go = lambda: app.fired.append(app._power_pending)
+        app._power_pending = armed
+        app._power_until = _time.monotonic() + window if armed else 0.0
+        return app
+
+    # Saying it once only asks the question.
+    app = make_app()
+    app._on_intent(parse("shut down"))
+    check("'shut down' only arms", app._power_pending == "shutdown" and not app.fired,
+          f"pending={app._power_pending} fired={app.fired}")
+    check("and puts the question on screen",
+          any("yes" in t for t in app.toasts), str(app.toasts))
+
+    # Saying it twice is not a confirmation — only "yes" is.
+    app = make_app("shutdown")
+    app._on_intent(parse("shut down"))
+    check("repeating it does not confirm", not app.fired, str(app.fired))
+
+    app = make_app("shutdown")
+    app._on_intent(parse("yes"))
+    check("'yes' confirms", app.fired == ["shutdown"], str(app.fired))
+
+    app = make_app("reboot")
+    app._on_intent(parse("yes"))
+    check("reboot confirms as reboot", app.fired == ["reboot"], str(app.fired))
+
+    # Anything else stands it down.
+    for phrase in ("no", "set a timer for three minutes", "the quick brown fox"):
+        app = make_app("shutdown")
+        app._on_intent(parse(phrase))
+        check(f"{phrase!r} cancels it", not app.fired and app._power_pending is None,
+              f"pending={app._power_pending} fired={app.fired}")
+
+    # A real command given while armed still has to be obeyed, not swallowed.
+    app = make_app("shutdown")
+    app._on_intent(parse("set a timer for three minutes"))
+    check("the cancelling command still runs", len(app.store) == 1, len(app.store))
+
+    # The window closes, so a "yes" overheard minutes later does nothing.
+    app = make_app("shutdown", window=-1.0)
+    app._on_intent(parse("yes"))
+    check("confirmation expires", not app.fired, str(app.fired))
+
+    # And an unprompted "yes" is not a licence to act.
+    app = make_app()
+    app._on_intent(parse("yes"))
+    check("'yes' out of the blue does nothing", not app.fired, str(app.fired))
+
+    # The whole feature can be switched off.
+    app = make_app()
+    app.cfg.data["power"]["enabled"] = False
+    app._on_intent(parse("shut down"))
+    check("power.enabled=false refuses", app._power_pending is None, app._power_pending)
+
+    print(f"\n{len(failures)} power failure(s)")
     return not failures
 
 

@@ -14,6 +14,14 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
+from .entries import KIND_ALIASES
+
+# Longest alternative first, so "stopwatch" is never chopped down to "watch".
+_KIND_ALT = "|".join(sorted(KIND_ALIASES, key=len, reverse=True))
+# "timer1", "stopwatch2" — the collapsed form normalise() produces.
+_KIND_RE = rf"({_KIND_ALT})(\d+)"
+_SPOKEN_INDEX_RE = re.compile(rf"\b({_KIND_ALT})\s+(?:number\s+)?(\d+)\b")
+
 UNITS = {
     "zero": 0, "oh": 0, "o": 0, "one": 1, "two": 2, "three": 3, "four": 4,
     "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
@@ -44,6 +52,11 @@ FILLER = {
 
 _CANCEL = {"cancel", "delete", "remove", "kill", "clear", "stop", "abort", "scrap"}
 _CREATE = {"set", "start", "create", "make", "add", "begin", "put", "new"}
+# Answers to a confirmation prompt.  Kept deliberately small: these only ever
+# match as the first word, and a loose set here would let chatter power off
+# the Pi.
+_AFFIRM = {"yes", "yeah", "yep", "confirm", "affirmative", "correct"}
+_DENY = {"no", "nope", "never", "negative"}
 
 
 @dataclass
@@ -91,8 +104,9 @@ def normalise(text: str) -> list[str]:
     t = t.replace("-", " ")
     for pattern, repl in _MERIDIEM_FIXUPS:
         t = re.sub(pattern, repl, t)
-    # "alarm one" and "alarm 1" and "alarm1" all become "alarm1"
-    t = re.sub(r"\b(alarm|timer)s?\s+(?:number\s+)?(\d+)\b", r"\1\2", t)
+    # "alarm one", "alarm 1" and "alarm1" all become "alarm1"; "watch 2"
+    # collapses to the canonical "stopwatch2" at the same time.
+    t = _SPOKEN_INDEX_RE.sub(lambda m: f"{KIND_ALIASES[m.group(1)]}{m.group(2)}", t)
     t = re.sub(r"[^a-z0-9:\s]", " ", t)
     return [w for w in t.split() if w]
 
@@ -241,14 +255,22 @@ def _next_occurrence(now: datetime, hour: int, minute: int, tomorrow: bool = Fal
 def _find_target(tokens: list[str]) -> str | None:
     """Pull "timer1" / "alarm2" / a bare "timer" out of the tokens."""
     for tok in tokens:
-        m = re.fullmatch(r"(alarm|timer)(\d+)", tok)
+        m = re.fullmatch(_KIND_RE, tok)
         if m:
-            return f"{m.group(1)}{m.group(2)}"
+            return f"{KIND_ALIASES[m.group(1)]}{m.group(2)}"
     for i, tok in enumerate(tokens):
-        if tok in ("alarm", "timer", "alarms", "timers"):
-            kind = tok.rstrip("s")
+        kind = KIND_ALIASES.get(tok)
+        if kind:
             value, _ = parse_number(tokens, i + 1)
             return f"{kind}{value}" if value is not None else kind
+    return None
+
+
+def _kind_named(words: set[str]) -> str | None:
+    """Which kind of entry the phrase talks about, if any."""
+    for kind in ("alarm", "timer", "stopwatch"):
+        if any(KIND_ALIASES.get(w) == kind for w in words):
+            return kind
     return None
 
 
@@ -266,7 +288,33 @@ def parse(text: str, now: datetime | None = None) -> Intent:
 
     words = set(tokens)
     target = _find_target(tokens)
-    plural = any(t in ("alarms", "timers", "everything", "all") for t in tokens)
+    kind_named = _kind_named(words)
+    plural = any(
+        t in ("alarms", "timers", "stopwatches", "watches", "everything", "all")
+        for t in tokens
+    )
+
+    # --- answering a confirmation prompt ----------------------------------
+    # First-token only: "yes" mid-sentence is filler, but on its own it is an
+    # answer to the question the clock just put on screen.
+    if tokens[0] in _AFFIRM:
+        return Intent("confirm", text=text)
+    if tokens[0] in _DENY:
+        return Intent("deny", text=text)
+
+    # --- power ------------------------------------------------------------
+    # Ahead of dismiss, which also claims "shut" and "off".  Every form needs
+    # either two words or one that means nothing else, so no single stray word
+    # can cut the power.  "restart" only counts on its own: "restart timer
+    # one" is about a timer, not the machine.
+    if "reboot" in words or tokens == ["restart"]:
+        return Intent("power", extras={"mode": "reboot"}, text=text)
+    if (
+        words & {"shutdown", "poweroff", "halt"}
+        or ("shut" in words and "down" in words)
+        or ("power" in words and words & {"off", "down"})
+    ):
+        return Intent("power", extras={"mode": "shutdown"}, text=text)
 
     # --- dismiss / snooze -------------------------------------------------
     if words & {"snooze"}:
@@ -282,13 +330,9 @@ def parse(text: str, now: datetime | None = None) -> Intent:
 
     # --- cancel -----------------------------------------------------------
     if words & _CANCEL:
-        if plural and ("all" in words or "everything" in words or target in ("alarm", "timer", None)):
-            kind = None
-            if "alarms" in words or "alarm" in words:
-                kind = "alarm"
-            elif "timers" in words or "timer" in words:
-                kind = "timer"
-            return Intent("clear", kind=kind, text=text)
+        bare = target in ("alarm", "timer", "stopwatch", None)
+        if plural and ("all" in words or "everything" in words or bare):
+            return Intent("clear", kind=kind_named, text=text)
         return Intent("cancel", target=target, text=text)
 
     # --- add / subtract time ---------------------------------------------
@@ -296,8 +340,8 @@ def parse(text: str, now: datetime | None = None) -> Intent:
     # entry, but "add a timer for three minutes" creates one.  Read it as an
     # adjustment only when the phrase points at something that already exists:
     # an explicit "to <entry>", an indexed name, or no entry noun at all.
-    named = target not in (None, "timer", "alarm")
-    adjusting = "to" in tokens or named or not (words & {"alarm", "timer", "alarms", "timers"})
+    named = target not in (None, "timer", "alarm", "stopwatch")
+    adjusting = "to" in tokens or named or kind_named is None
     if words & {"add", "extend", "plus", "more"} and adjusting:
         delta = parse_duration(_duration_slice(tokens))
         if delta:
@@ -310,6 +354,10 @@ def parse(text: str, now: datetime | None = None) -> Intent:
     # --- create -----------------------------------------------------------
     wants_alarm = "alarm" in words or bool(words & {"wake", "remind"})
     wants_timer = "timer" in words or "countdown" in words
+    # Checked first: a stopwatch takes no duration, so the timer branch below
+    # would reject the phrase for not carrying one.
+    if kind_named == "stopwatch" or words & {"count", "counting", "counter", "elapsed"}:
+        return Intent("set_stopwatch", text=text)
 
     if wants_timer and not wants_alarm:
         delta = parse_duration(_duration_slice(tokens))
@@ -343,9 +391,6 @@ def parse(text: str, now: datetime | None = None) -> Intent:
     return Intent("unknown", text=text)
 
 
-_ENTRY_NOUNS = ("alarm", "timer", "alarms", "timers")
-
-
 def _duration_slice(tokens: list[str]) -> list[str]:
     """Tokens with the entry name removed, ready for duration parsing.
 
@@ -358,10 +403,10 @@ def _duration_slice(tokens: list[str]) -> list[str]:
     i = 0
     while i < len(tokens):
         tok = tokens[i]
-        if re.fullmatch(r"(alarm|timer)\d+", tok):
+        if re.fullmatch(_KIND_RE, tok):
             i += 1
             continue
-        if tok in _ENTRY_NOUNS:
+        if tok in KIND_ALIASES:
             i += 1
             # Swallow the index, if one was spoken.
             value, nxt = parse_number(tokens, i)
@@ -378,7 +423,8 @@ def _time_slice(tokens: list[str]) -> list[str]:
     for anchor in ("for", "at"):
         if anchor in tokens:
             return tokens[tokens.index(anchor) + 1:]
-    return [t for t in tokens if t not in ("alarm", "timer", "set", "wake", "remind")]
+    return [t for t in tokens
+            if t not in KIND_ALIASES and t not in ("set", "wake", "remind")]
 
 
 # --------------------------------------------------------------------------
@@ -394,9 +440,11 @@ def vocabulary(wake_word: str = "clock") -> list[str]:
     words: set[str] = set()
     words.update(UNITS, TENS, ORDINALS)
     words.update(SECOND_WORDS, MINUTE_WORDS, HOUR_WORDS)
-    words.update(FILLER, _CANCEL, _CREATE)
+    words.update(FILLER, _CANCEL, _CREATE, _AFFIRM, _DENY, KIND_ALIASES)
     words.update({
-        wake_word, "alarm", "alarms", "timer", "timers", "countdown",
+        wake_word,
+        "shutdown", "shut", "down", "power", "poweroff", "halt",
+        "reboot", "restart", "count", "counting", "counter", "elapsed",
         "am", "pm", "o", "clock", "noon", "midnight", "midday",
         "morning", "afternoon", "evening", "night", "tonight", "tomorrow",
         "past", "to", "for", "at", "in", "and", "half", "quarter",
@@ -407,9 +455,10 @@ def vocabulary(wake_word: str = "clock") -> list[str]:
         "status", "what", "list", "show",
     })
     words.discard("")
-    # Spelling variants the parser tolerates but the acoustic model has never
-    # heard.  Leaving them in makes Vosk log a warning per word at startup.
-    words -= {"fourty", "unpause", "lets", "let's"}
+    # Words the parser tolerates but the acoustic model has never heard.
+    # Leaving them in makes Vosk log a warning per word at startup and match
+    # nothing anyway; they still work over `--send`.
+    words -= {"fourty", "unpause", "lets", "let's", "poweroff"}
     # Multi-word tokens can't go in a Vosk grammar; split them out.
     flat = {w for word in words for w in str(word).split()}
     return sorted(flat) + ["[unk]"]

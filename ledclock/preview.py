@@ -12,7 +12,7 @@ from pathlib import Path
 from .backends import PreviewBackend
 from .config import Config
 from .display import Renderer
-from .entries import Alarm, EntryState, Timer
+from .entries import Alarm, EntryState, Stopwatch, Timer
 
 # (filename, description, builder) — builder returns (entries, status)
 SCENES: list[tuple[str, str, object]] = []
@@ -41,6 +41,14 @@ def _timer(index: int, seconds_left: float, state=EntryState.PENDING) -> Timer:
         index=index, created_at=now, state=state,
         duration=timedelta(seconds=seconds_left), started_at=now,
         fired_at=now if state in (EntryState.RINGING, EntryState.EXPIRED) else None,
+    )
+
+
+def _watch(index: int, seconds_elapsed: float, state=EntryState.PENDING) -> Stopwatch:
+    now = datetime.now()
+    return Stopwatch(
+        index=index, created_at=now, state=state,
+        started_at=now - timedelta(seconds=seconds_elapsed),
     )
 
 
@@ -96,6 +104,17 @@ def _s8():
 @_scene("09-overflow", "More entries than fit")
 def _s9():
     return [_timer(i, i * 90) for i in range(1, 5)] + [_alarm(i, i * 200) for i in range(1, 5)], {}
+
+
+@_scene("10-stopwatch", "A stopwatch counting up on its own")
+def _s10():
+    return [_watch(1, 95)], {}
+
+
+@_scene("11-all-three", "Alarm, timer and stopwatch together")
+def _s11():
+    # The stopwatch has no deadline, so it must sort below the two that do.
+    return [_alarm(1, 90), _timer(1, 180), _watch(1, 3 * 3600 + 125)], {}
 
 
 #: Candidate clock faces, as (label, font path).  Each is rendered both

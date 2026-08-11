@@ -1,4 +1,4 @@
-"""Alarms and timers: the data model plus the store that owns them.
+"""Alarms, timers and stopwatches: the data model plus the store that owns them.
 
 Lifecycle of an entry::
 
@@ -6,14 +6,18 @@ Lifecycle of an entry::
        │                  │                         │
        └──── cancel ──────┴──── dismiss ────────────┘ (removed immediately)
 
-Timers may additionally sit in PAUSED.  Everything is driven off wall-clock
-timestamps rather than tick counters so that a restart (or an NTP step) does
-not drift the countdown.
+Timers and stopwatches may additionally sit in PAUSED.  A stopwatch has no
+deadline, so it never enters RINGING and never lingers away — it stays until
+you cancel it.
+
+Everything is driven off wall-clock timestamps rather than tick counters so
+that a restart (or an NTP step) does not drift the count.
 """
 
 from __future__ import annotations
 
 import json
+import re
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -26,6 +30,16 @@ class EntryState(str, Enum):
     PAUSED = "paused"
     RINGING = "ringing"
     EXPIRED = "expired"
+
+
+# Every spoken word that names a kind of entry, mapped to the canonical kind.
+# The parser and the store share this so the two can never drift apart.
+KIND_ALIASES = {
+    "alarm": "alarm", "alarms": "alarm",
+    "timer": "timer", "timers": "timer", "countdown": "timer",
+    "stopwatch": "stopwatch", "stopwatches": "stopwatch",
+    "watch": "stopwatch", "watches": "stopwatch",
+}
 
 
 @dataclass
@@ -52,6 +66,15 @@ class Entry:
 
     def detail(self, now: datetime, hour_format: int, timer_format: str) -> str:
         raise NotImplementedError
+
+    def urgency(self, now: datetime) -> tuple[int, float]:
+        """Where this entry sorts in the list.
+
+        Anything with a deadline sorts by how soon it fires.  A stopwatch has
+        no deadline to compare against, so it overrides this to sit in a later
+        bucket rather than pretending to a remaining time.
+        """
+        return (0, self.remaining(now).total_seconds())
 
     def is_ringing(self) -> bool:
         return self.state is EntryState.RINGING
@@ -123,19 +146,48 @@ class Alarm(Entry):
 
 
 @dataclass
-class Timer(Entry):
-    """Counts down a duration from the moment it was started."""
+class RunningEntry(Entry):
+    """Shared machinery for entries that accumulate running time.
 
-    duration: timedelta = field(default_factory=timedelta)
+    Both the countdown timer and the count-up stopwatch measure the same
+    thing — how long they have been running — and pause the same way.  Only
+    what they do with that number differs.
+    """
+
     started_at: datetime = field(default_factory=datetime.now)
-    # Time already burned before the most recent pause.
+    # Time already accumulated before the most recent pause.
     elapsed_before_pause: timedelta = field(default_factory=timedelta)
-    kind: str = "timer"
 
     def elapsed(self, now: datetime) -> timedelta:
         if self.state is EntryState.PAUSED:
             return self.elapsed_before_pause
         return self.elapsed_before_pause + (now - self.started_at)
+
+    def pause(self, now: datetime) -> None:
+        if self.state is EntryState.PENDING:
+            self.elapsed_before_pause = self.elapsed(now)
+            self.state = EntryState.PAUSED
+
+    def resume(self, now: datetime) -> None:
+        if self.state is EntryState.PAUSED:
+            self.started_at = now
+            self.state = EntryState.PENDING
+
+    def to_dict(self) -> dict:
+        d = super().to_dict()
+        d.update(
+            started_at=self.started_at.isoformat(),
+            elapsed_before_pause=self.elapsed_before_pause.total_seconds(),
+        )
+        return d
+
+
+@dataclass
+class Timer(RunningEntry):
+    """Counts down a duration from the moment it was started."""
+
+    duration: timedelta = field(default_factory=timedelta)
+    kind: str = "timer"
 
     def remaining(self, now: datetime) -> timedelta:
         return self.duration - self.elapsed(now)
@@ -154,24 +206,56 @@ class Timer(Entry):
             self.state = EntryState.PENDING
             self.fired_at = None
 
-    def pause(self, now: datetime) -> None:
-        if self.state is EntryState.PENDING:
-            self.elapsed_before_pause = self.elapsed(now)
-            self.state = EntryState.PAUSED
-
-    def resume(self, now: datetime) -> None:
-        if self.state is EntryState.PAUSED:
-            self.started_at = now
-            self.state = EntryState.PENDING
-
     def to_dict(self) -> dict:
         d = super().to_dict()
-        d.update(
-            duration=self.duration.total_seconds(),
-            started_at=self.started_at.isoformat(),
-            elapsed_before_pause=self.elapsed_before_pause.total_seconds(),
-        )
+        d["duration"] = self.duration.total_seconds()
         return d
+
+
+@dataclass
+class Stopwatch(RunningEntry):
+    """Counts up from zero.
+
+    There is no target, so it never fires, never rings and never lingers
+    away: a stopwatch stays on screen until you cancel it.  That is the point
+    of one — you do not know in advance how long the thing you are timing
+    will take.
+    """
+
+    kind: str = "stopwatch"
+
+    @property
+    def name(self) -> str:
+        # "Watch1" is six characters, exactly like Alarm1 and Timer1, so a
+        # stopwatch row does not push the entry font ladder down a size.
+        return f"Watch{self.index}"
+
+    def remaining(self, now: datetime) -> timedelta:
+        # Counting up is counting down from zero.  Only sorting and display
+        # ever read this, and both are overridden below; it is defined so the
+        # base class never surprises a caller with NotImplementedError.
+        return -self.elapsed(now)
+
+    def detail(self, now: datetime, hour_format: int, timer_format: str) -> str:
+        return format_duration(self.elapsed(now).total_seconds(), timer_format)
+
+    def urgency(self, now: datetime) -> tuple[int, float]:
+        # Nothing is pending on a stopwatch, so it sits below the entries that
+        # are actually counting towards something, oldest first.
+        return (1, float(self.index))
+
+    def tick(self, now: datetime, ring_seconds: float) -> bool:
+        return False  # Never fires.
+
+    def add(self, delta: timedelta, now: datetime | None = None) -> None:
+        """Shift the reading itself, so "add ten minutes" means what it says."""
+        now = now or datetime.now()
+        total = max(timedelta(0), self.elapsed(now) + delta)
+        if self.state is EntryState.PAUSED:
+            self.elapsed_before_pause = total
+        else:
+            self.started_at = now - total
+            self.elapsed_before_pause = timedelta()
 
 
 def format_clock_time(when: datetime, hour_format: int) -> str:
@@ -236,19 +320,37 @@ class EntryStore:
             self._entries.append(timer)
             return timer
 
+    def add_stopwatch(self) -> Stopwatch:
+        with self._lock:
+            now = datetime.now()
+            watch = Stopwatch(
+                index=self._next_index("stopwatch"),
+                created_at=now,
+                started_at=now,
+            )
+            self._entries.append(watch)
+            return watch
+
     # ---------------- lookup ----------------
 
     def find(self, key: str | None) -> Entry | None:
-        """Resolve ``timer1`` / ``alarm2``, or bare ``timer`` = most recent."""
+        """Resolve ``timer1`` / ``alarm2``, or bare ``timer`` = most recent.
+
+        The panel labels a stopwatch ``Watch1`` to keep the row short, so
+        "watch one" has to resolve to it as readily as "stopwatch one" does.
+        """
         if not key:
             return None
         key = key.replace(" ", "").replace("#", "").lower()
+        m = re.fullmatch(r"([a-z]+)(\d*)", key)
+        if m and m.group(1) in KIND_ALIASES:
+            key = KIND_ALIASES[m.group(1)] + m.group(2)
         with self._lock:
             for entry in self._entries:
                 if entry.key == key:
                     return entry
             # Bare kind: newest of that kind still on screen.
-            if key in ("timer", "alarm"):
+            if key in ("timer", "alarm", "stopwatch"):
                 matches = [e for e in self._entries if e.kind == key]
                 if matches:
                     return max(matches, key=lambda e: e.created_at)
@@ -257,11 +359,13 @@ class EntryStore:
     def all(self) -> list[Entry]:
         """Snapshot sorted for display: ringing first, then soonest to fire."""
         with self._lock:
+            now = datetime.now()
+
             def sort_key(e: Entry):
                 return (
                     0 if e.state is EntryState.RINGING else 1,
                     2 if e.state is EntryState.EXPIRED else 0,
-                    e.remaining(datetime.now()).total_seconds(),
+                    e.urgency(now),
                     e.kind,
                     e.index,
                 )
@@ -359,11 +463,12 @@ def _entry_from_dict(raw: dict) -> Entry:
     )
     if kind == "alarm":
         return Alarm(target=datetime.fromisoformat(raw["target"]), **common)
+    running = dict(
+        started_at=datetime.fromisoformat(raw["started_at"]),
+        elapsed_before_pause=timedelta(seconds=float(raw.get("elapsed_before_pause", 0))),
+    )
     if kind == "timer":
-        return Timer(
-            duration=timedelta(seconds=float(raw["duration"])),
-            started_at=datetime.fromisoformat(raw["started_at"]),
-            elapsed_before_pause=timedelta(seconds=float(raw.get("elapsed_before_pause", 0))),
-            **common,
-        )
+        return Timer(duration=timedelta(seconds=float(raw["duration"])), **running, **common)
+    if kind == "stopwatch":
+        return Stopwatch(**running, **common)
     raise ValueError(f"unknown entry kind {kind!r}")

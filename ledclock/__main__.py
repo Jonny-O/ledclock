@@ -22,6 +22,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="send a command to the running clock and exit")
     parser.add_argument("--list-audio", action="store_true",
                         help="show capture devices and the configured mic, then exit")
+    parser.add_argument("--mic-level", metavar="SECONDS", nargs="?", const=15.0, type=float,
+                        help="meter the mic and report peak/rms dBFS (default 15s)")
     parser.add_argument("--preview", metavar="DIR", nargs="?", const="preview",
                         help="render sample frames to PNGs instead of the panel")
     parser.add_argument("--compare-fonts", metavar="DIR", nargs="?", const="preview",
@@ -88,11 +90,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.check_intents:
         from .selftest import (
             run_intent_checks, run_layout_checks, run_lifecycle_checks,
+            run_power_checks,
         )
         print("intent parsing")
         ok = run_intent_checks()
-        print("\nalarm/timer lifecycle")
+        print("\nalarm/timer/stopwatch lifecycle")
         ok = run_lifecycle_checks() and ok
+        print("\nshutdown confirmation gate")
+        ok = run_power_checks() and ok
         print("\nclock face layout stability")
         ok = run_layout_checks() and ok
         return 0 if ok else 1
@@ -103,6 +108,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"\nconfigured capture device: {cfg.get('voice.device')}")
         print(f"vosk model: {cfg.expand('voice.model_path')}")
         return 0
+
+    if args.mic_level is not None:
+        from .voice import meter
+        return meter(cfg, args.mic_level)
 
     from .app import ClockApp, install_signal_handlers
 
