@@ -33,13 +33,39 @@ except ImportError:  # pragma: no cover - depends on host
     lgpio = None
 
 
+def tone_list(raw, fallback: float = 4400.0) -> list[float]:
+    """Normalise ``frequency_hz`` into a list of tones to alternate between.
+
+    A bare number stays a single tone; a list warbles through them, one per
+    beat.  Junk and non-positive entries are dropped rather than reaching
+    lgpio, which would raise mid-ring on a background thread.
+    """
+    values = raw if isinstance(raw, (list, tuple)) else [raw]
+    tones: list[float] = []
+    for value in values:
+        try:
+            freq = float(value)
+        except (TypeError, ValueError):
+            continue
+        # lgpio's software PWM accepts 0.1-10000 Hz; anything else is a typo.
+        if 0.1 <= freq <= 10000:
+            tones.append(freq)
+    if not tones:
+        log.warning("no usable buzzer frequency in %r; falling back to %g Hz",
+                    raw, fallback)
+        return [fallback]
+    return tones
+
+
 class Buzzer:
     def __init__(self, cfg: Config):
         c = cfg.section("buzzer")
         self.enabled = bool(c.get("enabled", False))
         self.pin = int(c.get("pin", 13))
         self.kind = str(c.get("type", "passive"))
-        self.frequency = float(c.get("frequency_hz", 2730))
+        # One number, or a list to alternate between: frequency_hz = [4400, 3300]
+        self.frequencies = tone_list(c.get("frequency_hz", 4400))
+        self.frequency = self.frequencies[0]
         self.duty = float(c.get("duty_cycle", 50))
         self.beat_on = float(c.get("beat_on", 0.15))
         self.beat_off = float(c.get("beat_off", 0.35))
@@ -66,12 +92,13 @@ class Buzzer:
 
     # ---------------- low level ----------------
 
-    def _tone_on(self) -> None:
+    def _tone_on(self, freq: float | None = None) -> None:
         if self._chip is None:
             return
         try:
             if self.kind == "passive":
-                lgpio.tx_pwm(self._chip, self.pin, self.frequency, self.duty)
+                lgpio.tx_pwm(self._chip, self.pin,
+                             self.frequency if freq is None else freq, self.duty)
             else:
                 lgpio.gpio_write(self._chip, self.pin, 1 if self.active_high else 0)
         except Exception as exc:
@@ -119,13 +146,19 @@ class Buzzer:
 
     def _run(self) -> None:
         try:
+            step = 0
             while not self._stop.is_set():
-                self._tone_on()
+                self._tone_on(self.frequencies[step % len(self.frequencies)])
+                step += 1
                 if self._stop.wait(self.beat_on):
                     break
-                self._tone_off()
-                if self._stop.wait(self.beat_off):
-                    break
+                # beat_off = 0 runs the tones back to back, which is what makes
+                # a two-tone list a continuous warble rather than two beeps.
+                # Silencing the pin between them would put a gap in it.
+                if self.beat_off > 0:
+                    self._tone_off()
+                    if self._stop.wait(self.beat_off):
+                        break
         finally:
             self._tone_off()
 
@@ -264,7 +297,8 @@ def sweep(cfg: Config, lo: float = 1000.0, hi: float = 6000.0,
         return 1
 
     best_f, best_db = max(usable, key=lambda r: r[1])
-    now = float(c.get("frequency_hz", 2730))
+    # frequency_hz may be a list of alternating tones; compare against the first.
+    now = tone_list(c.get("frequency_hz", 4400))[0]
     print(f"\nloudest at {best_f:.0f} Hz ({best_db:+.1f} dB)")
     near = [d for f, d in usable if abs(f - now) < step / 2]
     gain = best_db - near[0] if near else 0.0

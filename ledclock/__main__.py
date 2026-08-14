@@ -93,8 +93,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.check_intents:
         from .selftest import (
-            run_intent_checks, run_layout_checks, run_lifecycle_checks,
-            run_power_checks, run_wake_checks,
+            run_buzzer_checks, run_intent_checks, run_layout_checks,
+            run_lifecycle_checks, run_power_checks, run_wake_checks,
         )
         print("intent parsing")
         ok = run_intent_checks()
@@ -104,6 +104,8 @@ def main(argv: list[str] | None = None) -> int:
         ok = run_wake_checks() and ok
         print("\nshutdown confirmation gate")
         ok = run_power_checks() and ok
+        print("\nbuzzer tones and beat pattern")
+        ok = run_buzzer_checks() and ok
         print("\nclock face layout stability")
         ok = run_layout_checks() and ok
         return 0 if ok else 1

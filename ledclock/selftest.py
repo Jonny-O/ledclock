@@ -425,6 +425,84 @@ def run_power_checks(verbose: bool = True) -> bool:
     return not failures
 
 
+def run_buzzer_checks(verbose: bool = True) -> bool:
+    """Tone parsing and the beat sequence, without touching a GPIO.
+
+    The ring pattern runs on a background thread during an alarm, so a bad
+    frequency there raises somewhere nobody is looking.  Everything here is
+    exercised against a Buzzer whose pin was never claimed.
+    """
+    import threading
+
+    from .buzzer import Buzzer, tone_list
+    from .config import Config
+
+    failures: list[str] = []
+
+    def check(label: str, condition: bool, detail: str = "") -> None:
+        if condition:
+            if verbose:
+                print(f"  ok    {label}")
+        else:
+            failures.append(label)
+            print(f"  FAIL  {label}{(' - ' + detail) if detail else ''}")
+
+    check("a bare number is one tone", tone_list(4400) == [4400.0])
+    check("a list alternates", tone_list([4400, 3300]) == [4400.0, 3300.0])
+    check("strings coerce", tone_list(["4400", 3300.5]) == [4400.0, 3300.5])
+    check("junk is dropped", tone_list([4400, "loud", None]) == [4400.0])
+    check("out of lgpio's range is dropped", tone_list([4400, 0, 99999]) == [4400.0])
+    check("an empty list falls back", tone_list([]) == [4400.0])
+    check("all-junk falls back", tone_list(["x"], fallback=2730) == [2730.0])
+
+    def played(freqs, beat_on, beat_off, beats):
+        """Run the real beat loop, recording what it asks the pin for."""
+        cfg = Config.load()
+        cfg.data["buzzer"] = dict(cfg.data["buzzer"], enabled=False)
+        buz = Buzzer(cfg)
+        buz.frequencies = tone_list(freqs)
+        buz.beat_on, buz.beat_off = beat_on, beat_off
+        seen: list[float | None] = []
+        buz._tone_on = lambda freq=None: seen.append(freq)
+        buz._tone_off = lambda: seen.append(None)
+        buz._stop = threading.Event()
+
+        def stopper():
+            # Let exactly `beats` beats through, then end the loop.
+            while len([s for s in seen if s is not None]) < beats:
+                pass
+            buz._stop.set()
+
+        watch = threading.Thread(target=stopper, daemon=True)
+        watch.start()
+        buz._run()
+        watch.join(timeout=1.0)
+        return seen
+
+    tones = [f for f in played([4400, 3300], 0.001, 0.0, 4) if f is not None]
+    check("two tones alternate across beats",
+          tones[:4] == [4400.0, 3300.0, 4400.0, 3300.0], str(tones[:4]))
+
+    seamless = played([4400, 3300], 0.001, 0.0, 3)
+    check("beat_off=0 leaves no gap between tones",
+          None not in seamless[:-1], str(seamless))
+
+    gapped = played([4400, 3300], 0.001, 0.001, 2)
+    check("beat_off>0 silences between tones", None in gapped[:3], str(gapped))
+
+    single = [f for f in played(4400, 0.001, 0.0, 3) if f is not None]
+    check("one tone repeats unchanged", single[:3] == [4400.0] * 3, str(single[:3]))
+
+    cfg = Config.load()
+    cfg.data["buzzer"] = dict(cfg.data["buzzer"], enabled=False)
+    idle = Buzzer(cfg)
+    check("frequency still exposes the first tone",
+          idle.frequency == idle.frequencies[0], str(idle.frequencies))
+
+    print(f"\n{len(failures)} buzzer failure(s)")
+    return not failures
+
+
 def run_layout_checks(verbose: bool = True) -> bool:
     """Nothing on the clock face may move except the thing that changed."""
     from .textrender import fit

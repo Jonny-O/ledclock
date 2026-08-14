@@ -131,6 +131,8 @@ DEFAULTS: dict[str, Any] = {
         "type": "passive",
         # A passive element is only loud within a few hundred Hz of its
         # mechanical resonance.  Measure yours: python -m ledclock --buzzer-sweep
+        # One number is a single tone; a list alternates one tone per beat,
+        # e.g. [4400, 3300] with beat_off = 0 for a warble.
         "frequency_hz": 4400,
         "duty_cycle": 50,
         # (on_seconds, off_seconds) repeated for the duration of the ring.

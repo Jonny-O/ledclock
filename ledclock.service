@@ -2,7 +2,17 @@
 Description=LED matrix clock with voice-controlled alarms and timers
 Documentation=file:__LEDCLOCK_DIR__/README.md
 # The USB mic and the panel both need to be up before we start.
-After=network-online.target sound.target
+#
+# Deliberately NOT After=network-online.target.  Nothing here touches the
+# network — the speech model is local, the panel is on the GPIO header and the
+# mic is USB — and waiting for it cost 2m43s of blank panel on every boot,
+# because systemd-networkd-wait-online sits out its full two-minute timeout on
+# a box where NetworkManager owns the interfaces.
+#
+# The Pi has no RTC, so the time is briefly wrong until NTP lands.  That is
+# fine: the clock re-reads the system time every frame and corrects itself
+# within a second of the sync, which beats showing nothing at all.
+After=sound.target
 Wants=sound.target
 
 [Service]

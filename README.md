@@ -303,11 +303,37 @@ A passive piezo on GPIO 12, driven with software PWM:
 [buzzer]
 enabled = true
 pin = 12
-type = "passive"     # bare piezo disc, driven with PWM
-# type = "active"    # module with its own oscillator — just switched on/off
-frequency_hz = 4400
+type = "passive"          # driven with PWM; 'active' = module with its own oscillator
+frequency_hz = [4400, 3300]
 duty_cycle = 50
+beat_on = 0.12
+beat_off = 0.0
+active_high = false       # the module's driver is a PNP, so it conducts on a LOW
 ```
+
+### Choosing the alarm sound
+
+`frequency_hz` takes one number for a plain beep, or a list to alternate
+between, one tone per beat:
+
+| `frequency_hz` | `beat_on` | `beat_off` | Result |
+| --- | --- | --- | --- |
+| `4400` | 0.15 | 0.35 | single beep, repeating |
+| `[4400, 3300]` | 0.12 | **0** | continuous two-tone warble |
+| `[4400, 3300]` | 0.15 | 0.35 | urgent alternating beeps |
+| `[4400, 3300]` | 0.4 | 0.4 | slow two-tone doorbell |
+
+`beat_off = 0` is what makes a warble rather than two beeps — the tones run
+straight into each other with no silence, and `beat_on` then sets the warble
+rate.
+
+**Both tones have to sit near resonance.** This is the constraint that catches
+people out: a piezo is a mechanical resonator, not a speaker, so a low tone is
+not quieter — it is *absent*. Measured on this build, 500 Hz came in at +1.2 dB
+above an empty room, which is nothing. Anything like 80/160 Hz will be silent no
+matter how the code drives it. If you want an alarm that feels low and urgent,
+get it from a **slow beat rate** with both tones up at 3300–4700 Hz, not from a
+low frequency.
 
 **If it is barely audible, the frequency is almost certainly wrong.** A passive
 element is a mechanical resonator, and off its resonance it hardly moves air at

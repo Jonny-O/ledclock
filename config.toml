@@ -130,18 +130,35 @@ enabled = true
 pin = 12
 type = "passive"        # 'passive' = bare piezo (PWM); 'active' = self-driving module
 
-# A passive element is only loud near its mechanical resonance, and the peak is
-# sharp.  Measured on this build: 4400 Hz is 29 dB — about 29x the sound
-# pressure — louder than the 2730 Hz that used to be here.  Anything from 4200
-# to 4700 is within a couple of dB; below 3500 it falls off a cliff.
-# Re-measure if you ever swap the part:
+# One number is a single tone.  A list alternates, one tone per beat, which is
+# what makes a warble:
+#     frequency_hz = 4400              # plain beep
+#     frequency_hz = [4400, 3300]      # two-tone
+#
+# Stay near the element's resonance.  It is a mechanical resonator and the peak
+# is sharp — measured on this build, 4400 Hz is 29 dB (about 29x the sound
+# pressure) above 2730 Hz, and by 500 Hz there is essentially nothing left:
+# +1.2 dB above the empty room.  Low tones like 80/160 Hz will not be audible
+# at all; get a "low" character from a slow beat_on instead, not a low tone.
+# Anything from 4200-4700 is within a couple of dB.  Re-measure if you swap the
+# part:
 #     python -m ledclock --buzzer-sweep
-frequency_hz = 4400
+frequency_hz = [4400, 3300]
 
 # 50% is the loudest for a piezo; measured 8 dB above a 10% duty cycle.
 duty_cycle = 50
-beat_on = 0.15
-beat_off = 0.35
+
+# How long each beat holds, and the gap after it.
+#
+# beat_off = 0 runs the tones straight into each other, so a two-tone list
+# becomes a continuous warble — beat_on then sets the warble rate.  Give
+# beat_off a value instead and you get separate beeps that alternate pitch.
+#
+#     beat_on = 0.12, beat_off = 0     European-siren warble  (current)
+#     beat_on = 0.15, beat_off = 0.35  urgent alternating beeps
+#     beat_on = 0.4,  beat_off = 0.4   slow two-tone doorbell
+beat_on = 0.12
+beat_off = 0.0
 # The module switches its buzzer with an S8550 (SMD code "2TY"), a PNP on the
 # high side — so it conducts when the data pin is pulled LOW.  Idling the pin
 # high is what actually turns it off between beats.
