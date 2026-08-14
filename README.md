@@ -507,6 +507,23 @@ sudo journalctl -u ledclock -f
 It runs as root because the matrix library needs to map the GPIO peripheral,
 and stays root so the button pins and state file remain writable.
 
+**`ledclock.service` in the repo is a template, not an installable unit.** It
+carries `__LEDCLOCK_DIR__` placeholders that `setup.sh` substitutes at install
+time. Copying it into place directly gets you:
+
+```
+WorkingDirectory= path is not absolute: __LEDCLOCK_DIR__
+```
+
+After editing the template, reinstall it the way `setup.sh` does:
+
+```bash
+sed "s|__LEDCLOCK_DIR__|$HOME/ledclock|g" ~/ledclock/ledclock.service \
+  | sudo tee /etc/systemd/system/ledclock.service >/dev/null
+sudo systemctl daemon-reload
+sudo systemctl restart ledclock
+```
+
 ## If something looks wrong
 
 | Symptom | Try |
