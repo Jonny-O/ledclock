@@ -92,7 +92,7 @@ clock_antialias = true
 # The bar under the time, showing seconds left in the minute. It spans the
 # width of the digits above it.
 seconds_bar_height = 2          # 1px in the compact clock regardless
-seconds_bar_gap = 2             # space between digits and bar
+seconds_bar_gap = 4             # space between digits and bar
 seconds_bar_color = [255, 176, 0]
 seconds_bar_track_color = [46, 32, 0]
 seconds_bar_style = "deplete"   # 'deplete' empties; 'fill' grows
@@ -102,7 +102,7 @@ seconds_bar_style = "deplete"   # 'deplete' empties; 'fill' grows
 seconds_bar_group_size = 10
 seconds_bar_dot_width = 1       # pixels per dot
 seconds_bar_dot_gap = 0         # gap between dots inside a group
-seconds_bar_group_gap = 2       # gap between the six groups (1 less when compact)
+seconds_bar_group_gap = 4       # gap between the six groups (1 less when compact)
 
 font_dir = "rpi-rgb-led-matrix/fonts"
 entry_fonts = ["10x20.bdf", "9x18B.bdf", "7x13B.bdf", "6x10.bdf", "5x7.bdf", "4x6.bdf"]
@@ -121,7 +121,7 @@ date_font = "6x10.bdf"
 # How long an alarm or timer stays on screen after it fires, in seconds.
 linger_seconds = 300
 # How long it flashes and buzzes before going quiet but staying on screen.
-ring_seconds = 30
+ring_seconds = 5
 max_visible = 8
 
 [buzzer]
