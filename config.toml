@@ -142,7 +142,10 @@ frequency_hz = 4400
 duty_cycle = 50
 beat_on = 0.15
 beat_off = 0.35
-active_high = true
+# The module switches its buzzer with an S8550 (SMD code "2TY"), a PNP on the
+# high side — so it conducts when the data pin is pulled LOW.  Idling the pin
+# high is what actually turns it off between beats.
+active_high = false
 
 [buttons]
 enabled = true

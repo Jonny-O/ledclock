@@ -206,6 +206,9 @@ def sweep(cfg: Config, lo: float = 1000.0, hi: float = 6000.0,
     c = cfg.section("buzzer")
     pin = int(c.get("pin", 13))
     duty = float(c.get("duty_cycle", 50))
+    # A high-side PNP driver conducts on a LOW, so idling low would hold the
+    # buzzer on between steps and colour every reading after the first.
+    idle = 0 if bool(c.get("active_high", True)) else 1
     device = str(cfg.get("voice.device", "plughw:1,0"))
     if str(c.get("type", "passive")) != "passive":
         print("this only makes sense for a passive buzzer; an active one has a "
@@ -220,7 +223,7 @@ def sweep(cfg: Config, lo: float = 1000.0, hi: float = 6000.0,
     chip = lgpio.gpiochip_open(0)
     results: list[tuple[float, float]] = []
     try:
-        lgpio.gpio_claim_output(chip, pin, 0)
+        lgpio.gpio_claim_output(chip, pin, idle)
         # The first capture after opening the device carries a startup click
         # that inflates every band, so discard it before taking the reference.
         _record(device)
@@ -237,7 +240,7 @@ def sweep(cfg: Config, lo: float = 1000.0, hi: float = 6000.0,
             time.sleep(0.2)
             heard = _record(device)
             lgpio.tx_pwm(chip, pin, 0, 0)
-            lgpio.gpio_write(chip, pin, 0)
+            lgpio.gpio_write(chip, pin, idle)
 
             on = _band_power(heard, freq)
             off = _band_power(quiet, freq)
@@ -249,7 +252,7 @@ def sweep(cfg: Config, lo: float = 1000.0, hi: float = 6000.0,
     finally:
         try:
             lgpio.tx_pwm(chip, pin, 0, 0)
-            lgpio.gpio_write(chip, pin, 0)
+            lgpio.gpio_write(chip, pin, idle)
         except Exception:
             pass
         lgpio.gpiochip_close(chip)
