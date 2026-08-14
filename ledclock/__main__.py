@@ -26,6 +26,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="meter the mic and report peak/rms dBFS (default 15s)")
     parser.add_argument("--check-wake", metavar="PHRASE", nargs="?", const="",
                         help="check a wake phrase against the speech model, then exit")
+    parser.add_argument("--buzzer-sweep", metavar="LO:HI:STEP", nargs="?", const="1000:6000:100",
+                        help="find the passive buzzer's loudest frequency using the mic")
     parser.add_argument("--preview", metavar="DIR", nargs="?", const="preview",
                         help="render sample frames to PNGs instead of the panel")
     parser.add_argument("--compare-fonts", metavar="DIR", nargs="?", const="preview",
@@ -121,6 +123,15 @@ def main(argv: list[str] | None = None) -> int:
         from .voice import check_wake
         # Bare --check-wake tests whatever the config already says.
         return check_wake(cfg, args.check_wake or None)
+
+    if args.buzzer_sweep is not None:
+        from .buzzer import sweep
+        try:
+            lo, hi, step = (float(p) for p in args.buzzer_sweep.split(":"))
+        except ValueError:
+            print("--buzzer-sweep wants LO:HI:STEP in Hz, e.g. 1000:6000:100")
+            return 2
+        return sweep(cfg, lo, hi, step)
 
     from .app import ClockApp, install_signal_handlers
 

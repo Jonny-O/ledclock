@@ -256,6 +256,9 @@ python -m ledclock --mic-level
 
 # Can the speech model actually hear this wake phrase?
 python -m ledclock --check-wake "timekeeper"
+
+# Which frequency is the piezo loudest at?  (Stop the service first.)
+python -m ledclock --buzzer-sweep
 ```
 
 ## Preferences
@@ -294,19 +297,65 @@ those, so check before rewiring.
 
 ### Buzzer
 
-Not yet wired, so it ships disabled. When the piezo goes on:
+A passive piezo on GPIO 12, driven with software PWM:
 
 ```toml
 [buzzer]
 enabled = true
-pin = 13
+pin = 12
 type = "passive"     # bare piezo disc, driven with PWM
 # type = "active"    # module with its own oscillator — just switched on/off
-frequency_hz = 2730  # most piezo discs are loudest around here
+frequency_hz = 4400
+duty_cycle = 50
 ```
 
-Drive anything louder than a bare disc through a transistor rather than off
-the GPIO pin directly.
+**If it is barely audible, the frequency is almost certainly wrong.** A passive
+element is a mechanical resonator, and off its resonance it hardly moves air at
+all. On this build the difference between 2730 Hz and 4400 Hz measured **29 dB
+— roughly 29× the sound pressure** — from the same pin, the same wiring and the
+same 3.3 V. Nothing about the circuit changed.
+
+That peak belongs to the specific part, so measure yours rather than copying a
+number:
+
+```bash
+python -m ledclock --buzzer-sweep            # 1000-6000 Hz in 100 Hz steps
+python -m ledclock --buzzer-sweep 3000:5000:50
+```
+
+It steps the buzzer through the range and uses **the microphone as the
+instrument**, reporting each frequency's level against the same band recorded in
+silence so the room cancels out. It prints the config line to paste.
+
+```
+   freq     level
+----------------------------------------------
+   4000     +34.8  #################
+   4200     +40.5  ####################
+   4400     +41.7  ####################
+   4600     +39.7  ###################
+
+loudest at 4400 Hz (+41.7 dB)
+```
+
+Two things it is worth *not* blaming:
+
+* **Software PWM.** lgpio's `tx_pwm` is bit-banged from userspace, which sounds
+  like it ought to be the culprit. Measured against a tight busy-wait toggle
+  loop it was within 1 dB at every frequency tested — the waveform is fine.
+* **Duty cycle.** 50% is already the loudest; measured 8 dB above 10%, 4 dB
+  above 75%.
+
+If it is still too quiet at resonance, the remaining lever is voltage swing —
+the element only ever sees 3.3 V. Driving it through a transistor from 5 V, or
+push-pull between two GPIOs instead of pin-to-ground, buys roughly 4 dB and
+6 dB respectively. Anything louder than a bare disc should go through a
+transistor regardless, rather than off the pin directly.
+
+**Do not move it to hardware PWM.** GPIO 12 and GPIO 18 are the same PWM
+channel (PWM0_0), and the matrix library holds GPIO 18 in ALT5 for its own
+timing — you can see it with `pinctrl get 18`. Claiming the channel for a tone
+would fight the panel for it.
 
 ## How it fits together
 
@@ -445,6 +494,7 @@ and stays root so the button pins and state file remain writable.
 | Only works up close | see [Hearing you further away](#hearing-you-further-away) |
 | Voice triggers by itself | `wake_min_repeats = 3`, and lower `voice.gain` |
 | It shut down on its own | `[power] confirm` got turned off; put it back |
+| Buzzer barely audible | wrong frequency, not wiring — `--buzzer-sweep` |
 
 ## License
 

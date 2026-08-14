@@ -129,7 +129,9 @@ DEFAULTS: dict[str, Any] = {
         "pin": 13,
         # 'passive' drives a square wave via PWM; 'active' just switches on.
         "type": "passive",
-        "frequency_hz": 2730,
+        # A passive element is only loud within a few hundred Hz of its
+        # mechanical resonance.  Measure yours: python -m ledclock --buzzer-sweep
+        "frequency_hz": 4400,
         "duty_cycle": 50,
         # (on_seconds, off_seconds) repeated for the duration of the ring.
         "beat_on": 0.15,
