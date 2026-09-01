@@ -257,5 +257,12 @@ group = "gpio"
 
 [state]
 # Alarms and timers survive a restart.
-path = "state.json"
+#
+# This lives on the boot partition, not next to the config, because the root
+# filesystem is mounted read-only behind a RAM overlay: a write here would
+# look like it succeeded and then vanish on the next reboot.  /boot/firmware
+# is the one partition still mounted read-write.  The save is atomic (write a
+# .tmp, then rename), which is what keeps the FAT directory entry consistent
+# if the power drops mid-write.
+path = "/boot/firmware/ledclock/state.json"
 restore_on_start = true
