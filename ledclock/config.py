@@ -190,6 +190,8 @@ DEFAULTS: dict[str, Any] = {
         # question on the panel.  Turning it off costs a walk to the plug the
         # first time the mic mishears something.
         "confirm": True,
+        # How long the question stands, and how long the clock keeps the mic
+        # open for the answer: it just asked, so "yes" alone is enough.
         "confirm_seconds": 10.0,
         "shutdown_command": ["systemctl", "poweroff"],
         "reboot_command": ["systemctl", "reboot"],

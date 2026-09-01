@@ -359,11 +359,22 @@ def run_power_checks(verbose: bool = True) -> bool:
         def chirp(self):
             pass
 
+    class _Voice:
+        """Records the windows the app opened the mic for."""
+
+        def __init__(self):
+            self.armed = []
+
+        def listen(self, seconds=None):
+            self.armed.append(seconds)
+            return True
+
     def make_app(armed: str | None = None, window: float = 10.0) -> ClockApp:
         app = ClockApp.__new__(ClockApp)
         app.cfg = Config.load()
         app.store = EntryStore()
         app.buzzer = _Buzzer()
+        app.voice = _Voice()
         app.toasts = []
         app.fired = []
         app.toast = lambda text, color=None, seconds=None: app.toasts.append(text)
@@ -379,6 +390,22 @@ def run_power_checks(verbose: bool = True) -> bool:
           f"pending={app._power_pending} fired={app.fired}")
     check("and puts the question on screen",
           any("yes" in t for t in app.toasts), str(app.toasts))
+    # Asking the question is no use if the answer needs the wake phrase first.
+    check("and opens the mic for the answer", app.voice.armed == [10.0],
+          str(app.voice.armed))
+
+    # The mic stays open exactly as long as the answer is still accepted.
+    app = make_app()
+    app.cfg.data["power"]["confirm_seconds"] = 4.0
+    app._on_intent(parse("reboot"))
+    check("for as long as the answer counts", app.voice.armed == [4.0],
+          str(app.voice.armed))
+
+    # Nothing was asked, so there is nothing to listen for.
+    app = make_app()
+    app.cfg.data["power"]["confirm"] = False
+    app._on_intent(parse("shut down"))
+    check("no prompt, no open mic", app.voice.armed == [], str(app.voice.armed))
 
     # Saying it twice is not a confirmation — only "yes" is.
     app = make_app("shutdown")
@@ -420,6 +447,57 @@ def run_power_checks(verbose: bool = True) -> bool:
     app.cfg.data["power"]["enabled"] = False
     app._on_intent(parse("shut down"))
     check("power.enabled=false refuses", app._power_pending is None, app._power_pending)
+    check("and does not open the mic either", app.voice.armed == [],
+          str(app.voice.armed))
+
+    # The listener half: an armed window has to make a bare "yes" count.
+    from .voice import VoiceListener
+
+    def make_listener() -> VoiceListener:
+        heard = []
+        lst = VoiceListener(Config.load(), heard.append)
+        lst._thread = object()  # start() is what sets this; there is no mic here.
+        lst.heard = heard
+        return lst
+
+    lst = make_listener()
+    lst.listen(10.0)
+    check("an armed listener is awake", lst.awake)
+    lst._handle_utterance("yes")
+    check("a bare 'yes' reaches the app",
+          [i.action for i in lst.heard] == ["confirm"],
+          str([i.action for i in lst.heard]))
+
+    lst = make_listener()
+    lst._handle_utterance("yes")
+    check("but only while armed", lst.heard == [], str(lst.heard))
+
+    lst = make_listener()
+    lst.listen(-1.0)
+    lst._handle_utterance("yes")
+    check("an expired window does not count", lst.heard == [], str(lst.heard))
+
+    lst = make_listener()
+    lst.listen(10.0)
+    lst._handle_utterance("no")
+    check("'no' gets through the same way",
+          [i.action for i in lst.heard] == ["deny"],
+          str([i.action for i in lst.heard]))
+
+    # One answer per question: the mic closes again as soon as it hears one.
+    lst = make_listener()
+    lst.listen(10.0)
+    lst._handle_utterance("yes")
+    check("one answer closes the mic", not lst.awake)
+    lst._handle_utterance("yes")
+    check("so the next utterance is ignored", len(lst.heard) == 1, str(lst.heard))
+
+    # With voice control off there is no listener to arm, and the caller is told.
+    off = VoiceListener(Config.load(), lambda i: None)
+    off.enabled = False
+    check("a disabled listener reports that it did not arm", off.listen(10.0) is False)
+    check("a stopped listener does not arm either",
+          VoiceListener(Config.load(), lambda i: None).listen(10.0) is False)
 
     print(f"\n{len(failures)} power failure(s)")
     return not failures

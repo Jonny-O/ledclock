@@ -235,13 +235,21 @@ deadline to move instead. It will not go below zero.
 utterance. The panel asks `shutdown? say yes` and waits ten seconds:
 
 ```
-"timekeeper, shut down"     ->  panel: shutdown? say yes
-"timekeeper, yes"           ->  goes down
+"timekeeper, shut down"     ->  panel: shutdown? say yes, chirp
+"yes"                       ->  goes down
 ```
+
+The answer needs no wake phrase. Asking the question opens the mic for the
+same ten seconds the answer is accepted for, and chirps to say so — the wake
+run is there to keep the room's conversation out of the recogniser, and it has
+nothing left to guard once the panel is asking you something. Saying
+"timekeeper, yes" still works; it is just no longer required.
 
 Only `yes` gets through. Saying "shut down" a second time does not count, and
 any other command — including `no` — stands it down and is then obeyed
-normally. If the window passes, a stray "yes" does nothing.
+normally. The mic closes on the first thing it hears either way, so the window
+is one answer long, not ten seconds of open microphone. If the window passes
+without a word, a stray "yes" afterwards does nothing.
 
 That gate is the whole reason this is safe to leave enabled, because the
 failure mode is a walk to the plug. `[power] confirm = false` removes it and

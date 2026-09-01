@@ -238,6 +238,9 @@ enabled = true
 # This is what makes the feature safe to leave on — turn it off and the first
 # thing the mic mishears costs you a walk to the plug.
 confirm = true
+
+# How long the question stands.  The clock also listens for the answer over
+# exactly this window, so "yes" on its own is enough — no second wake phrase.
 confirm_seconds = 10.0
 
 # The clock runs as root, so these need no sudo.

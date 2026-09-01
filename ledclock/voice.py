@@ -193,6 +193,26 @@ class VoiceListener:
     def awake(self) -> bool:
         return time.monotonic() < self._awake_until
 
+    def listen(self, seconds: float | None = None) -> bool:
+        """Wake without the wake phrase, because the clock asked a question.
+
+        The wake run is there to keep the room's conversation out of the
+        recogniser.  It has nothing left to guard once the panel is showing a
+        question and waiting on the answer: whoever asked is already talking
+        to the clock, and making them address it by name a second time just
+        to say "yes" is how a confirmation prompt ends up switched off.
+
+        Returns False when there is no listener to arm, so the caller can
+        tell "listening" apart from "voice control is not running".
+        """
+        if not self.enabled or self._thread is None:
+            return False
+        self._awake_until = time.monotonic() + (
+            self.command_timeout if seconds is None else float(seconds)
+        )
+        self.on_state(True, "")
+        return True
+
     # ---------------- recognition ----------------
 
     def _build_recognizer(self):

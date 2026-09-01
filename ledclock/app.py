@@ -247,6 +247,11 @@ class ClockApp:
         # The prompt stays up exactly as long as the answer is accepted, so
         # the question never vanishes while the user is still deciding.
         self.toast(f"{mode}? say yes", (255, 80, 80), seconds=window)
+        # And the clock listens for that answer by itself, for the same
+        # window: it just asked the question, so requiring the wake phrase
+        # again before "yes" counts would be asking to be re-introduced
+        # mid-conversation.  The chirp says the mic is open.
+        self.voice.listen(window)
 
     def _do_confirm(self, intent: Intent) -> None:
         # Reached only when nothing is armed; _on_intent handles the live case.
