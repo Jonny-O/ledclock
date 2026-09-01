@@ -408,6 +408,11 @@ Wire each button between its pin and ground (`pull_up = true` is the default).
 Other actions: `dismiss_all`, `toggle_hour_format`, `add_minute`,
 `pause_resume`.
 
+This table replaces the built-in default outright rather than merging into it,
+which the rest of the config does. The pins you list are the only pins claimed,
+so remapping one does not leave the old one live; an empty `[buttons.pins]`
+means no buttons at all.
+
 **Free pins.** With `parallel = 1` the matrix uses GPIO 4, 7, 8, 9, 10, 11,
 15, 17, 18, 22, 23, 24, 25 and 27. That leaves **5, 6, 12, 13, 14, 16, 19, 20,
 21 and 26** for buttons and the buzzer. Raising `parallel` claims most of

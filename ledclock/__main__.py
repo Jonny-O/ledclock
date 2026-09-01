@@ -93,11 +93,14 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.check_intents:
         from .selftest import (
-            run_buzzer_checks, run_intent_checks, run_layout_checks,
-            run_lifecycle_checks, run_power_checks, run_wake_checks,
+            run_buzzer_checks, run_config_checks, run_intent_checks,
+            run_layout_checks, run_lifecycle_checks, run_power_checks,
+            run_wake_checks,
         )
-        print("intent parsing")
-        ok = run_intent_checks()
+        print("preferences merging")
+        ok = run_config_checks()
+        print("\nintent parsing")
+        ok = run_intent_checks() and ok
         print("\nalarm/timer/stopwatch lifecycle")
         ok = run_lifecycle_checks() and ok
         print("\nwake phrase matching")

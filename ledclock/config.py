@@ -209,11 +209,22 @@ DEFAULTS: dict[str, Any] = {
 }
 
 
-def _merge(base: dict, over: dict) -> dict:
+# Tables whose keys are the user's own data rather than a fixed set of
+# settings.  These replace the default wholesale instead of merging key by
+# key, because a mapping the user rewrote has to actually replace the one
+# shipped here -- otherwise a pin they unmapped stays live and fires its old
+# action on a GPIO they never wired.  It is also what lets `pins = {}` mean
+# what the comment above it says: no buttons at all.
+REPLACE_WHOLE: frozenset[tuple[str, ...]] = frozenset({("buttons", "pins")})
+
+
+def _merge(base: dict, over: dict, path: tuple[str, ...] = ()) -> dict:
     out = copy.deepcopy(base)
     for key, value in over.items():
-        if isinstance(value, dict) and isinstance(out.get(key), dict):
-            out[key] = _merge(out[key], value)
+        here = path + (str(key),)
+        if (isinstance(value, dict) and isinstance(out.get(key), dict)
+                and here not in REPLACE_WHOLE):
+            out[key] = _merge(out[key], value, here)
         else:
             out[key] = value
     return out

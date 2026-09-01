@@ -425,6 +425,54 @@ def run_power_checks(verbose: bool = True) -> bool:
     return not failures
 
 
+def run_config_checks(verbose: bool = True) -> bool:
+    """Preference merging: which tables replace, and which merge key by key.
+
+    buttons.pins maps a GPIO to an action, so its keys are a description of
+    the user's wiring rather than a fixed set of settings.  Merged key by key
+    it used to keep any default pin the user had replaced, which claimed a
+    GPIO they never wired and fired its action on whatever the floating pin
+    did.  Everything else still merges, so a partial section stays valid.
+    """
+    from .config import DEFAULTS, _merge
+
+    failures: list[str] = []
+
+    def check(label: str, condition: bool, detail: str = "") -> None:
+        if condition:
+            if verbose:
+                print(f"  ok    {label}")
+        else:
+            failures.append(label)
+            print(f"  FAIL  {label}{(' - ' + detail) if detail else ''}")
+
+    mine = {"buttons": {"pins": {"5": "dismiss", "13": "cycle_brightness"}}}
+    pins = _merge(DEFAULTS, mine)["buttons"]["pins"]
+    check("a user pin map replaces the default one",
+          set(pins) == {"5", "13"}, str(sorted(pins)))
+    check("an unmapped default pin does not come back",
+          "16" not in pins, str(sorted(pins)))
+    check("an empty pin table means no buttons at all",
+          _merge(DEFAULTS, {"buttons": {"pins": {}}})["buttons"]["pins"] == {})
+    check("omitting the table altogether keeps the defaults",
+          _merge(DEFAULTS, {"buttons": {"snooze_minutes": 5}})["buttons"]["pins"]
+          == DEFAULTS["buttons"]["pins"])
+    check("the rest of [buttons] still merges",
+          _merge(DEFAULTS, mine)["buttons"]["snooze_minutes"]
+          == DEFAULTS["buttons"]["snooze_minutes"])
+
+    part = _merge(DEFAULTS, {"display": {"fps": 30}})
+    check("a partial section keeps its other keys",
+          part["display"]["fps"] == 30
+          and part["display"]["clock_color"] == DEFAULTS["display"]["clock_color"])
+    check("an untouched section is left alone", part["voice"] == DEFAULTS["voice"])
+    check("merging never mutates DEFAULTS",
+          DEFAULTS["buttons"]["pins"]["16"] == "cycle_brightness")
+
+    print(f"\n{len(failures)} config failure(s)")
+    return not failures
+
+
 def run_buzzer_checks(verbose: bool = True) -> bool:
     """Tone parsing and the beat sequence, without touching a GPIO.
 
