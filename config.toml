@@ -19,9 +19,9 @@ brightness = 60
 
 # Pi 4 usually needs 3-5.  Raise it if the panel shows sparkle or ghosting,
 # lower it if the refresh rate is too low and the image flickers.
-gpio_slowdown = 4
+gpio_slowdown = 3
 
-pwm_bits = 11
+pwm_bits = 10
 pwm_lsb_nanoseconds = 130
 
 # Leave 0 unless your panel needs them (some P2 panels want row_address_type=0
