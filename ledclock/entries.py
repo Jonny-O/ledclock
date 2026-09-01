@@ -288,6 +288,10 @@ class EntryStore:
         self.ring_seconds = ring_seconds
         self._entries: list[Entry] = []
         self._lock = threading.RLock()
+        # The exact text last written to disk, so save() can tell a real
+        # change from the render loop's periodic re-save.  None means "we
+        # have not read or written the file yet".
+        self._saved_text: str | None = None
 
     # ---------------- creation ----------------
 
@@ -424,13 +428,26 @@ class EntryStore:
     def save(self, path: Path) -> None:
         with self._lock:
             payload = {"entries": [e.to_dict() for e in self._entries]}
+        text = json.dumps(payload, indent=2)
+        # The render loop saves on a timer rather than on change, so an idle
+        # clock would rewrite a byte-identical file every few seconds --
+        # thousands of pointless flash writes a day, each one a window for a
+        # power cut to land mid-rename.  A counting-down timer serialises to
+        # the same text on every tick (the remaining time is derived from
+        # started_at), so this skips almost all of them.  The root filesystem
+        # is read-only, which makes this the only file the clock still writes.
+        if text == self._saved_text:
+            return
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp = path.with_suffix(path.suffix + ".tmp")
-            tmp.write_text(json.dumps(payload, indent=2))
+            tmp.write_text(text)
             tmp.replace(path)
         except OSError:
+            # Leave _saved_text alone so the next tick tries again.
             pass
+        else:
+            self._saved_text = text
 
     def load(self, path: Path) -> None:
         try:
@@ -451,6 +468,11 @@ class EntryStore:
             restored.append(entry)
         with self._lock:
             self._entries = restored
+        # Match what is already on disk, so a restart that changes nothing
+        # does not immediately rewrite the file it just read.
+        self._saved_text = json.dumps(
+            {"entries": [e.to_dict() for e in restored]}, indent=2
+        )
 
 
 def _entry_from_dict(raw: dict) -> Entry:
