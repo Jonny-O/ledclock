@@ -51,7 +51,7 @@ Then reboot, for the two boot-level changes it makes (see
 
 | | |
 | --- | --- |
-| Pi | Raspberry Pi 4 (2 GB is plenty) |
+| Pi | Raspberry Pi 4 (2 GB is plenty); a Pi 3 works too, see [below](#running-on-a-pi-3) |
 | Panel | 128×64 P2 HUB75, wired straight to the GPIO header |
 | Mic | Any USB audio input (optional — voice can be disabled) |
 | Buttons | Optional, any GPIO pins, mapped in `config.toml` |
@@ -59,6 +59,124 @@ Then reboot, for the two boot-level changes it makes (see
 
 If you use an Adafruit RGB Matrix HAT or Bonnet instead of direct wiring, set
 `hardware_mapping = "adafruit-hat"` in `config.toml`.
+
+### Running on a Pi 3
+
+It works, and nothing in the code checks which Pi it is on. Three things
+change.
+
+**Turn `gpio_slowdown` down, not up.** The setting exists to stop a fast Pi
+from outrunning the panel's shift registers, so a slower board needs *less* of
+it. Start at 1 and only go to 2 if you see ghosting. Leaving it at the Pi 4's
+4 gives you a dim, low-refresh panel and looks like a wiring fault.
+
+| | Pi 4 | Pi 3 |
+| --- | --- | --- |
+| `gpio_slowdown` | 3–5 | 1–2 |
+| `pwm_bits` | 11 | 9–10 if it flickers |
+
+`pwm_bits = 11` means 2048 PWM slices per frame, every one of them bit-banged
+from the CPU. A Cortex-A53 at 1.4 GHz has roughly half the per-core throughput
+of the Pi 4's A72, so the refresh rate drops noticeably. Dropping to 9 costs
+colour depth you cannot see on a clock face and buys back a lot of refresh.
+`isolcpus=3` still applies — the 3 and 3A+ are also quad-core.
+
+**On a 3A+, 512 MB is enough but not by much.** The 3B and 3B+ have 1 GB and
+can skip this. Measured on this build, the speech model is the whole story:
+
+```
+baseline python         8.2 MB
++ vosk import          38.6 MB
++ model loaded        155.7 MB
++ recognizer running  162.1 MB
++ numpy/PIL           172.1 MB
+```
+
+With the matrix library's framebuffers on top that is roughly 200–230 MB,
+against about 430 MB usable on a headless 512 MB board after the GPU split. It
+fits — run it without a desktop.
+
+The firmware also reserves memory for the GPU whether or not anything uses it.
+On this build that is 76 MB, which on a 512 MB board is 15% of your RAM held
+back for a GPU driving nothing — the panel hangs off the GPIO header:
+
+```bash
+vcgencmd get_mem gpu        # 76M here
+```
+
+Setting `gpu_mem=16` in `/boot/firmware/config.txt` claws most of it back.
+Check it with `vcgencmd get_mem gpu` after rebooting rather than assuming: this
+build uses `dtoverlay=vc4-kms-v3d`, and under KMS the setting interacts with CMA
+allocation differently than it did on the legacy stack.
+
+In order of return for effort:
+
+| Lever | Gets back | Costs |
+| --- | --- | --- |
+| Reclaim the GPU split | ~60 MB | nothing |
+| `[voice] enabled = false` | ~150 MB | speech; clock, buttons and buzzer unaffected |
+| Mask unused daemons | ~30–60 MB | `avahi-daemon`, `bluetooth`, `unattended-upgrades` all run by default and do nothing for a clock |
+| 32-bit Raspberry Pi OS | ~20–40 MB (estimated) | decode speed on the A53 |
+
+The last one is a genuine trade rather than a free win. Halving pointer width
+barely touches the 155 MB model, which is mostly dense float matrices, while
+AArch64 gives Kaldi twice the general-purpose registers. It buys headroom you
+probably have at the cost of CPU margin you probably do not, so treat it as a
+last lever, not a first one.
+
+Expect the pause between finishing a command and seeing it land to be longer
+than on a Pi 4 — the same A53-versus-A72 gap. Whether the small model still
+decodes faster than real time on an A53 is untested here; if it does not keep
+up, that shows as commands arriving late rather than being missed.
+
+**Bookworm or newer.** `config.py` reads preferences with `tomllib`, which
+arrived in Python 3.11. Bookworm ships 3.11 and is fine; Bullseye ships 3.9 and
+will not import it.
+
+On a **3A+** specifically, the single USB port goes to the mic, so set the Pi up
+headless over SSH or bring a hub. Its 2.4 GHz Wi-Fi with no ethernet costs
+nothing at runtime: the service deliberately does not wait for the network (see
+[Service](#service)).
+
+### Moving it to another Pi
+
+Everything heavy is regenerated on the far end, so the move is a clone and a
+script — 280 KB of tracked source pulls down the 52 MB matrix library and the
+68 MB speech model itself:
+
+```bash
+git clone https://github.com/Jonny-O/ledclock.git
+cd ledclock
+./setup.sh --build-only   # compile and self-test, touching nothing system-wide
+./setup.sh                # then the boot config and the service
+```
+
+Do not copy the working directory across. The venv bakes absolute paths
+into its script shebangs, and `rgbmatrix` and `vosk` are compiled per
+architecture, so a tarball only survives an identical arch, path and username —
+and all it saves you is the compile, which is the step most likely to surface a
+problem while you are still watching.
+
+**`config.toml` is tracked, so the new Pi inherits this one's tuning.** Most of
+it carries over fine. These describe the hardware rather than the software, and
+want checking on arrival:
+
+| Key | Why |
+| --- | --- |
+| `gpio_slowdown`, `pwm_bits` | tuned per board — see [Running on a Pi 3](#running-on-a-pi-3) |
+| `voice.device` | names one particular USB dongle |
+| `frequency_hz`, `active_high` | measured for one particular buzzer — re-run `--buzzer-sweep` |
+| `[buttons.pins]` | your wiring |
+
+The font paths are absolute but safe: `setup.sh` installs `fonts-inter` and
+`fonts-dejavu-core`.
+
+One step fails quietly. The mic gain is only raised if the capture card is named
+`Device` (`amixer -c Device sget Mic`); a different dongle skips it with no
+message, and the symptom is poor recognition rather than an error. Run
+`--list-audio` and `--mic-level` once on the new board.
+
+`state.json` is not tracked, so live alarms and timers stay behind.
 
 ## Talking to it
 
@@ -530,7 +648,7 @@ sudo systemctl restart ledclock
 | --- | --- |
 | Panel completely dark | `panel_type = "FM6126A"` — common on 128×64 P2 panels |
 | Colours wrong | `led_rgb_sequence`, e.g. `"RBG"` |
-| Sparkle, ghosting, flicker | raise `gpio_slowdown` (3–5 on a Pi 4) |
+| Sparkle, ghosting, flicker | `gpio_slowdown` — 3–5 on a Pi 4, but 1–2 on a Pi 3 |
 | Refuses to start, mentions sound | `snd_bcm2835` got loaded again |
 | Bottom half wrong / rows doubled | `multiplexing` or `row_address_type` |
 | Voice never triggers | `--check-wake`, then `--list-audio` and `--mic-level` |
