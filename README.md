@@ -138,35 +138,7 @@ headless over SSH or bring a hub. Its 2.4 GHz Wi-Fi with no ethernet costs
 nothing at runtime: the service deliberately does not wait for the network (see
 [Service](#service)).
 
-### Moving it to another Pi
 
-Everything heavy is regenerated on the far end, so the move is a clone and a
-script — 280 KB of tracked source pulls down the 52 MB matrix library and the
-68 MB speech model itself:
-
-```bash
-git clone https://github.com/Jonny-O/ledclock.git
-cd ledclock
-./setup.sh --build-only   # compile and self-test, touching nothing system-wide
-./setup.sh                # then the boot config and the service
-```
-
-Do not copy the working directory across. The venv bakes absolute paths
-into its script shebangs, and `rgbmatrix` and `vosk` are compiled per
-architecture, so a tarball only survives an identical arch, path and username —
-and all it saves you is the compile, which is the step most likely to surface a
-problem while you are still watching.
-
-**`config.toml` is tracked, so the new Pi inherits this one's tuning.** Most of
-it carries over fine. These describe the hardware rather than the software, and
-want checking on arrival:
-
-| Key | Why |
-| --- | --- |
-| `gpio_slowdown`, `pwm_bits` | tuned per board — see [Running on a Pi 3](#running-on-a-pi-3) |
-| `voice.device` | names one particular USB dongle |
-| `frequency_hz`, `active_high` | measured for one particular buzzer — re-run `--buzzer-sweep` |
-| `[buttons.pins]` | your wiring |
 
 The font paths are absolute but safe: `setup.sh` installs `fonts-inter` and
 `fonts-dejavu-core`.
